@@ -1,4 +1,4 @@
-worker
+/worker
 worker.yaml
 *.exe
 *.exe~
