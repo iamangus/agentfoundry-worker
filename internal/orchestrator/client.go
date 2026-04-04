@@ -81,25 +81,32 @@ func (c *Client) CallTool(ctx context.Context, server, tool string, arguments ma
 	return resp.Content, resp.IsError, nil
 }
 
-func (c *Client) PublishToken(ctx context.Context, streamID, token string) error {
-	publishClient := &http.Client{Timeout: 5 * time.Second}
-	body := map[string]string{"token": token}
+func (c *Client) publishShort(ctx context.Context, path string, body any) error {
+	shortClient := &http.Client{Timeout: 5 * time.Second}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/internal/streams/"+streamID+"/tokens", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
-	resp, err := publishClient.Do(req)
+	resp, err := shortClient.Do(req)
 	if err != nil {
 		return err
 	}
 	resp.Body.Close()
 	return nil
+}
+
+func (c *Client) PublishToken(ctx context.Context, streamID, token string) error {
+	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/tokens", map[string]string{"token": token})
+}
+
+func (c *Client) PublishEvent(ctx context.Context, streamID, eventType string) error {
+	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/events", map[string]string{"type": eventType})
 }
 
 func (c *Client) get(ctx context.Context, path string, result any) error {
