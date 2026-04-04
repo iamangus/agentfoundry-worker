@@ -40,6 +40,13 @@ func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) 
 	logger := activity.GetLogger(ctx)
 	logger.Info("calling MCP tool", "server", input.ServerName, "tool", input.ToolName)
 
+	if input.StreamID != "" {
+		status := fmt.Sprintf("Running %s.%s...", input.ServerName, input.ToolName)
+		if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "status", status); perr != nil {
+			logger.Warn("failed to publish status", "stream_id", input.StreamID, "error", perr)
+		}
+	}
+
 	content, isError, err := a.orchClient.CallTool(ctx, input.ServerName, input.ToolName, input.Arguments)
 	if err != nil {
 		return CallToolResult{}, fmt.Errorf("call tool %s.%s: %w", input.ServerName, input.ToolName, err)
@@ -57,6 +64,9 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	var err error
 
 	if input.StreamID != "" {
+		if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "status", "Thinking..."); perr != nil {
+			logger.Warn("failed to publish status", "stream_id", input.StreamID, "error", perr)
+		}
 		var responseStarted bool
 		resp, err = a.llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
 			for _, choice := range chunk.Choices {
@@ -69,7 +79,7 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 				}
 				if !responseStarted {
 					responseStarted = true
-					if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "response_start"); perr != nil {
+					if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "response_start", ""); perr != nil {
 						logger.Warn("failed to publish response_start", "stream_id", input.StreamID, "error", perr)
 					}
 				}

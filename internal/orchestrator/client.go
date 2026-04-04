@@ -105,8 +105,8 @@ func (c *Client) PublishToken(ctx context.Context, streamID, token string) error
 	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/tokens", map[string]string{"token": token})
 }
 
-func (c *Client) PublishEvent(ctx context.Context, streamID, eventType string) error {
-	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/events", map[string]string{"type": eventType})
+func (c *Client) PublishEvent(ctx context.Context, streamID, eventType, data string) error {
+	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/events", map[string]string{"type": eventType, "data": data})
 }
 
 func (c *Client) get(ctx context.Context, path string, result any) error {

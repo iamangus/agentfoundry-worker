@@ -44,6 +44,7 @@ type CallToolInput struct {
 	ServerName string         `json:"server_name"`
 	ToolName   string         `json:"tool_name"`
 	Arguments  map[string]any `json:"arguments"`
+	StreamID   string         `json:"stream_id,omitempty"`
 }
 
 type CallToolResult struct {

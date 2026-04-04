@@ -296,6 +296,7 @@ func dispatchToolCall(
 			ServerName: route.ServerName,
 			ToolName:   route.ToolName,
 			Arguments:  args,
+			StreamID:   params.StreamID,
 		}).Get(ctx, &result)
 		if err != nil {
 			return "", err
