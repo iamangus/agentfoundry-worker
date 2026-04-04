@@ -57,9 +57,7 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	var err error
 
 	if input.StreamID != "" {
-		if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "response_start"); perr != nil {
-			logger.Warn("failed to publish response_start", "stream_id", input.StreamID, "error", perr)
-		}
+		var responseStarted bool
 		resp, err = a.llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
 			for _, choice := range chunk.Choices {
 				if choice.Index != 0 || choice.Delta.Content == nil {
@@ -68,6 +66,12 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 				token := *choice.Delta.Content
 				if token == "" {
 					continue
+				}
+				if !responseStarted {
+					responseStarted = true
+					if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "response_start"); perr != nil {
+						logger.Warn("failed to publish response_start", "stream_id", input.StreamID, "error", perr)
+					}
 				}
 				if perr := a.orchClient.PublishToken(ctx, input.StreamID, token); perr != nil {
 					logger.Warn("failed to publish stream token", "stream_id", input.StreamID, "error", perr)
