@@ -81,6 +81,27 @@ func (c *Client) CallTool(ctx context.Context, server, tool string, arguments ma
 	return resp.Content, resp.IsError, nil
 }
 
+func (c *Client) PublishToken(ctx context.Context, streamID, token string) error {
+	publishClient := &http.Client{Timeout: 5 * time.Second}
+	body := map[string]string{"token": token}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/internal/streams/"+streamID+"/tokens", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+	resp, err := publishClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {

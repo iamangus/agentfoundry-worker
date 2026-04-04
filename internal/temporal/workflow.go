@@ -118,7 +118,10 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 		}
 
 		var llmResult LLMChatResult
-		err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, LLMChatInput{Request: req}).
+		err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, LLMChatInput{
+			Request:  req,
+			StreamID: params.StreamID,
+		}).
 			Get(ctx, &llmResult)
 		if err != nil {
 			return RunAgentResult{}, fmt.Errorf("LLM call failed on turn %d: %w", turn+1, err)

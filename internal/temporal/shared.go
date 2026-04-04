@@ -15,6 +15,7 @@ type RunAgentParams struct {
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
+	StreamID       string                   `json:"stream_id,omitempty"`
 }
 
 type RunAgentResult struct {
@@ -31,7 +32,8 @@ type ResolveAgentResult struct {
 }
 
 type LLMChatInput struct {
-	Request *llm.ChatRequest `json:"request"`
+	Request  *llm.ChatRequest `json:"request"`
+	StreamID string           `json:"stream_id,omitempty"`
 }
 
 type LLMChatResult struct {

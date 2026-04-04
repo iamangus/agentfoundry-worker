@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ const defaultBaseURL = "https://openrouter.ai/api/v1"
 // Client is the interface for LLM providers.
 type Client interface {
 	ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
+	ChatCompletionStream(ctx context.Context, req *ChatRequest, onChunk func(StreamChunk)) (*ChatResponse, error)
 	SupportsSchemaValidation() bool
 }
 
@@ -114,6 +116,7 @@ type ToolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
 	Function FunctionCall `json:"function"`
+	Index    int          `json:"index,omitempty"`
 }
 
 // FunctionCall represents the function portion of a tool call.
@@ -141,6 +144,23 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+type StreamChunk struct {
+	ID      string         `json:"id"`
+	Choices []StreamChoice `json:"choices"`
+}
+
+type StreamChoice struct {
+	Index        int         `json:"index"`
+	Delta        StreamDelta `json:"delta"`
+	FinishReason *string     `json:"finish_reason"`
+}
+
+type StreamDelta struct {
+	Role      string     `json:"role,omitempty"`
+	Content   *string    `json:"content,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 func isEmptyResponse(resp *ChatResponse) bool {
@@ -262,6 +282,126 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 	}
 
 	return nil, fmt.Errorf("LLM request failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatRequest, onChunk func(StreamChunk)) (*ChatResponse, error) {
+	if req.Model == "" {
+		req.Model = c.defaultModel
+	}
+
+	streamReq := &struct {
+		*ChatRequest
+		Stream bool `json:"stream"`
+	}{ChatRequest: req, Stream: true}
+
+	body, err := json.Marshal(streamReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	streamClient := &http.Client{Timeout: 5 * time.Minute}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range c.headers {
+		httpReq.Header.Set(k, v)
+	}
+
+	resp, err := streamClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var accumulatedContent string
+	var accumulatedToolCalls []ToolCall
+	var role string
+	var chunkID string
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk StreamChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			slog.Warn("failed to parse stream chunk", "error", err, "data", data)
+			continue
+		}
+
+		if chunk.ID != "" {
+			chunkID = chunk.ID
+		}
+
+		for _, choice := range chunk.Choices {
+			if choice.Index != 0 {
+				continue
+			}
+			if choice.Delta.Role != "" {
+				role = choice.Delta.Role
+			}
+			if choice.Delta.Content != nil {
+				accumulatedContent += *choice.Delta.Content
+			}
+			for _, tc := range choice.Delta.ToolCalls {
+				idx := tc.Index
+				for len(accumulatedToolCalls) <= idx {
+					accumulatedToolCalls = append(accumulatedToolCalls, ToolCall{})
+				}
+				accumulatedToolCalls[idx].Type = tc.Type
+				if tc.ID != "" {
+					accumulatedToolCalls[idx].ID = tc.ID
+				}
+				accumulatedToolCalls[idx].Function.Name += tc.Function.Name
+				accumulatedToolCalls[idx].Function.Arguments += tc.Function.Arguments
+				accumulatedToolCalls[idx].Index = tc.Index
+			}
+		}
+
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		slog.Warn("stream scanner error", "error", err)
+	}
+
+	result := &ChatResponse{
+		ID: chunkID,
+		Choices: []Choice{
+			{
+				Index: 0,
+				Message: Message{
+					Role:      role,
+					Content:   accumulatedContent,
+					ToolCalls: accumulatedToolCalls,
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	return result, nil
 }
 
 // StripCodeFences extracts raw JSON from an LLM text response.

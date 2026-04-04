@@ -51,9 +51,30 @@ func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) 
 
 func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (LLMChatResult, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Info("sending LLM chat request", "model", input.Request.Model, "messages", len(input.Request.Messages))
+	logger.Info("sending LLM chat request", "model", input.Request.Model, "messages", len(input.Request.Messages), "stream_id", input.StreamID)
 
-	resp, err := a.llmClient.ChatCompletion(ctx, input.Request)
+	var resp *llm.ChatResponse
+	var err error
+
+	if input.StreamID != "" {
+		resp, err = a.llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
+			for _, choice := range chunk.Choices {
+				if choice.Index != 0 || choice.Delta.Content == nil {
+					continue
+				}
+				token := *choice.Delta.Content
+				if token == "" {
+					continue
+				}
+				if perr := a.orchClient.PublishToken(ctx, input.StreamID, token); perr != nil {
+					logger.Warn("failed to publish stream token", "stream_id", input.StreamID, "error", perr)
+				}
+			}
+		})
+	} else {
+		resp, err = a.llmClient.ChatCompletion(ctx, input.Request)
+	}
+
 	if err != nil {
 		return LLMChatResult{}, fmt.Errorf("LLM chat completion: %w", err)
 	}
