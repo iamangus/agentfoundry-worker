@@ -1,6 +1,8 @@
 # agentfoundry-worker
 
-A Temporal worker that runs AI agents defined in YAML. Each agent is backed by an OpenAI-compatible LLM API and can invoke tools from external MCP servers. The multi-turn conversation loop runs as a durable Temporal workflow, making every LLM call and tool invocation replayable and resilient to failures.
+A Temporal worker that executes AI agent workflows. Each agent run is backed by an OpenAI-compatible LLM API (OpenRouter, OpenAI, Ollama, Together AI, Azure OpenAI, etc.) and can invoke tools via the agentfoundry backend. The multi-turn conversation loop runs as a durable Temporal workflow, making every LLM call and tool invocation replayable and resilient to failures.
+
+The worker connects to [agentfoundry](https://github.com/angoo/agentfoundry) to resolve agent definitions, discover tools, and publish stream events. It does not handle user authentication or agent management — that is the backend's responsibility.
 
 ## Architecture
 
@@ -30,9 +32,9 @@ A Temporal worker that runs AI agents defined in YAML. Each agent is backed by a
 
 ## Concepts
 
-**Agent** — A YAML definition combining a system prompt, an LLM model, and a set of tools. When invoked, the agent runs a multi-turn LLM conversation, calling tools as needed, and returns a final response.
+**Agent** — A YAML definition combining a system prompt, an LLM model, and a set of tools. The worker fetches the definition from the agentfoundry backend at the start of each workflow run.
 
-**Tool** — A capability from an external MCP server, referenced as `server.tool` (e.g. `srvd.searxng_web_search`). Agents can also call other agents as tools.
+**Tool** — A capability from an external MCP server, referenced as `server.tool` (e.g. `srvd.searxng_web_search`). Tool discovery and MCP execution go through the agentfoundry backend. Agents can also call other agents as tools.
 
 **Workflow** — Each agent run executes as a Temporal workflow (`RunAgentWorkflow`). Individual steps (LLM calls, tool invocations) are Temporal activities, making the entire run durable and replayable.
 
@@ -42,6 +44,7 @@ A Temporal worker that runs AI agents defined in YAML. Each agent is backed by a
 
 - Go 1.21+
 - A running Temporal server
+- A running [agentfoundry](https://github.com/angoo/agentfoundry) backend
 - An API key for any OpenAI-compatible provider
 
 ### Build and Run
