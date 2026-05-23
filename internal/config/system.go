@@ -9,7 +9,6 @@ import (
 
 type SystemConfig struct {
 	Temporal     TemporalConf     `yaml:"temporal"`
-	LLM          LLMConf          `yaml:"llm"`
 	Orchestrator OrchestratorConf `yaml:"orchestrator"`
 }
 
@@ -17,14 +16,6 @@ type TemporalConf struct {
 	HostPort  string `yaml:"host_port"`
 	Namespace string `yaml:"namespace"`
 	APIKey    string `yaml:"api_key"`
-}
-
-type LLMConf struct {
-	BaseURL          string            `yaml:"base_url"`
-	APIKey           string            `yaml:"api_key"`
-	DefaultModel     string            `yaml:"default_model"`
-	Headers          map[string]string `yaml:"headers"`
-	SchemaValidation bool              `yaml:"schema_validation"`
 }
 
 type OrchestratorConf struct {
@@ -42,19 +33,6 @@ func DefaultSystem() *SystemConfig {
 		ns = "default"
 	}
 
-	baseURL := os.Getenv("LLM_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
-	}
-	defaultModel := os.Getenv("LLM_DEFAULT_MODEL")
-	if defaultModel == "" {
-		defaultModel = "openai/gpt-4o"
-	}
-	apiKey := os.Getenv("LLM_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("OPENROUTER_API_KEY")
-	}
-
 	orchURL := os.Getenv("ORCHESTRATOR_URL")
 	if orchURL == "" {
 		orchURL = "http://localhost:3000"
@@ -65,15 +43,6 @@ func DefaultSystem() *SystemConfig {
 			HostPort:  hostPort,
 			Namespace: ns,
 			APIKey:    os.Getenv("TEMPORAL_API_KEY"),
-		},
-		LLM: LLMConf{
-			BaseURL:      baseURL,
-			DefaultModel: defaultModel,
-			APIKey:       apiKey,
-			Headers: map[string]string{
-				"HTTP-Referer": "https://github.com/angoo/agentfoundry-worker",
-				"X-Title":      "agentfoundry-worker",
-			},
 		},
 		Orchestrator: OrchestratorConf{
 			URL:    orchURL,
@@ -91,29 +60,6 @@ func LoadSystem(path string) (*SystemConfig, error) {
 	cfg := DefaultSystem()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
-	}
-
-	cfg.LLM.BaseURL = expandEnvVar(cfg.LLM.BaseURL)
-	cfg.LLM.DefaultModel = expandEnvVar(cfg.LLM.DefaultModel)
-	cfg.LLM.APIKey = expandEnvVar(cfg.LLM.APIKey)
-
-	if cfg.LLM.BaseURL == "" {
-		cfg.LLM.BaseURL = os.Getenv("LLM_BASE_URL")
-	}
-	if cfg.LLM.BaseURL == "" {
-		cfg.LLM.BaseURL = "https://openrouter.ai/api/v1"
-	}
-	if cfg.LLM.DefaultModel == "" {
-		cfg.LLM.DefaultModel = os.Getenv("LLM_DEFAULT_MODEL")
-	}
-	if cfg.LLM.DefaultModel == "" {
-		cfg.LLM.DefaultModel = "openai/gpt-4o"
-	}
-	if cfg.LLM.APIKey == "" {
-		cfg.LLM.APIKey = os.Getenv("LLM_API_KEY")
-	}
-	if cfg.LLM.APIKey == "" {
-		cfg.LLM.APIKey = os.Getenv("OPENROUTER_API_KEY")
 	}
 
 	cfg.Temporal.HostPort = expandEnvVar(cfg.Temporal.HostPort)
@@ -144,10 +90,6 @@ func LoadSystem(path string) (*SystemConfig, error) {
 	}
 	if cfg.Orchestrator.APIKey == "" {
 		cfg.Orchestrator.APIKey = os.Getenv("ORCHESTRATOR_API_KEY")
-	}
-
-	for k, v := range cfg.LLM.Headers {
-		cfg.LLM.Headers[k] = expandEnvVar(v)
 	}
 
 	return cfg, nil

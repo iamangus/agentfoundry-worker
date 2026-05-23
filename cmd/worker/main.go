@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/angoo/agentfoundry-worker/internal/config"
-	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 	agentworker "github.com/angoo/agentfoundry-worker/internal/temporal"
 )
@@ -30,15 +29,7 @@ func main() {
 		APIKey: cfg.Orchestrator.APIKey,
 	})
 
-	llmClient := llm.NewClient(llm.ClientConfig{
-		BaseURL:          cfg.LLM.BaseURL,
-		APIKey:           cfg.LLM.APIKey,
-		DefaultModel:     cfg.LLM.DefaultModel,
-		Headers:          cfg.LLM.Headers,
-		SchemaValidation: cfg.LLM.SchemaValidation,
-	})
-
-	w, err := agentworker.NewWorker(cfg.Temporal, orchClient, llmClient)
+	w, err := agentworker.NewWorker(cfg.Temporal, orchClient)
 	if err != nil {
 		slog.Error("failed to create Temporal worker", "error", err)
 		os.Exit(1)

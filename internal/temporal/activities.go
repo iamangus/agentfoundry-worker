@@ -15,13 +15,11 @@ import (
 
 type Activities struct {
 	orchClient *orchestrator.Client
-	llmClient  llm.Client
 }
 
-func NewActivities(orchClient *orchestrator.Client, llmClient llm.Client) *Activities {
+func NewActivities(orchClient *orchestrator.Client) *Activities {
 	return &Activities{
 		orchClient: orchClient,
-		llmClient:  llmClient,
 	}
 }
 
@@ -60,6 +58,8 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	logger := activity.GetLogger(ctx)
 	logger.Info("sending LLM chat request", "model", input.Request.Model, "messages", len(input.Request.Messages), "stream_id", input.StreamID)
 
+	llmClient := a.llmClientForInput(input)
+
 	var resp *llm.ChatResponse
 	var err error
 
@@ -68,7 +68,7 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 			logger.Warn("failed to publish status", "stream_id", input.StreamID, "error", perr)
 		}
 		var responseStarted bool
-		resp, err = a.llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
+		resp, err = llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
 			for _, choice := range chunk.Choices {
 				if choice.Index != 0 || choice.Delta.Content == nil {
 					continue
@@ -89,7 +89,7 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 			}
 		})
 	} else {
-		resp, err = a.llmClient.ChatCompletion(ctx, input.Request)
+		resp, err = llmClient.ChatCompletion(ctx, input.Request)
 	}
 
 	if err != nil {
@@ -99,8 +99,28 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	return LLMChatResult{Response: resp}, nil
 }
 
-func (a *Activities) LLMSupportsSchemaActivity(ctx context.Context) (bool, error) {
-	return a.llmClient.SupportsSchemaValidation(), nil
+func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
+	cfg := llm.ClientConfig{
+		BaseURL:          "https://openrouter.ai/api/v1",
+		DefaultModel:     "openai/gpt-4o",
+		SchemaValidation: false,
+	}
+	if input.LLMConfig != nil {
+		if input.LLMConfig.BaseURL != "" {
+			cfg.BaseURL = input.LLMConfig.BaseURL
+		}
+		if input.LLMConfig.APIKey != "" {
+			cfg.APIKey = input.LLMConfig.APIKey
+		}
+		if input.LLMConfig.DefaultModel != "" {
+			cfg.DefaultModel = input.LLMConfig.DefaultModel
+		}
+		if input.LLMConfig.Headers != nil {
+			cfg.Headers = input.LLMConfig.Headers
+		}
+		cfg.SchemaValidation = input.LLMConfig.SchemaValidation
+	}
+	return llm.NewClient(cfg)
 }
 
 func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolDefsInput) (BuildToolDefsResult, error) {

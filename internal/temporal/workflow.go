@@ -65,10 +65,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 		so = def.StructuredOutput
 	}
 
-	var supportsSchema bool
-	if err = workflow.ExecuteActivity(actCtx, (*Activities).LLMSupportsSchemaActivity).Get(ctx, &supportsSchema); err != nil {
-		return RunAgentResult{}, fmt.Errorf("query schema support: %w", err)
-	}
+	supportsSchema := params.LLMConfig != nil && params.LLMConfig.SchemaValidation
 
 	// 4. Build initial messages: system prompt + history + user message.
 	systemPrompt := def.SystemPrompt
@@ -119,8 +116,9 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 
 		var llmResult LLMChatResult
 		err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, LLMChatInput{
-			Request:  req,
-			StreamID: params.StreamID,
+			Request:   req,
+			StreamID:  params.StreamID,
+			LLMConfig: params.LLMConfig,
 		}).
 			Get(ctx, &llmResult)
 		if err != nil {
