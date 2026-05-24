@@ -210,7 +210,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 		if concurrency == 0 {
 			concurrency = len(assistantMsg.ToolCalls)
 		}
-		sem := make(chan struct{}, concurrency)
+		sem := workflow.NewSemaphore(ctx, int64(concurrency))
 
 		wg := workflow.NewWaitGroup(ctx)
 		for i, tc := range assistantMsg.ToolCalls {
@@ -218,8 +218,8 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 			wg.Add(1)
 			workflow.Go(ctx, func(ctx workflow.Context) {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
+				sem.Acquire(ctx, 1)
+				defer sem.Release(1)
 
 				content, err := dispatchToolCall(ctx, tc, routeByLLMName, params)
 				outcomes[i] = toolCallOutcome{toolCallID: tc.ID, content: content}
