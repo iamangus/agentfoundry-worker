@@ -62,7 +62,7 @@ func (c *Client) GetAgent(ctx context.Context, name string) (*config.Definition,
 
 func (c *Client) GetAgentByID(ctx context.Context, agentID string) (*config.Definition, error) {
 	var def config.Definition
-	if err := c.get(ctx, "/api/v1/agents/by-id/"+agentID, &def); err != nil {
+	if err := c.get(ctx, "/api/v1/agent/"+agentID, &def); err != nil {
 		return nil, fmt.Errorf("get agent by id %q: %w", agentID, err)
 	}
 	return &def, nil
