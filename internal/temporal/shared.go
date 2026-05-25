@@ -19,6 +19,7 @@ type LLMConfigInput struct {
 }
 
 type RunAgentParams struct {
+	AgentID        string                   `json:"agent_id"`
 	AgentName      string                   `json:"agent_name"`
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
@@ -33,7 +34,7 @@ type RunAgentResult struct {
 }
 
 type ResolveAgentInput struct {
-	AgentName string `json:"agent_name"`
+	AgentID string `json:"agent_id"`
 }
 
 type ResolveAgentResult struct {
@@ -74,5 +75,5 @@ type ToolRoute struct {
 	Kind       ToolKind `json:"kind"`
 	ServerName string   `json:"server_name,omitempty"`
 	ToolName   string   `json:"tool_name,omitempty"`
-	AgentName  string   `json:"agent_name,omitempty"`
+	AgentID    string   `json:"agent_id,omitempty"`
 }

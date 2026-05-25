@@ -60,6 +60,14 @@ func (c *Client) GetAgent(ctx context.Context, name string) (*config.Definition,
 	return &def, nil
 }
 
+func (c *Client) GetAgentByID(ctx context.Context, agentID string) (*config.Definition, error) {
+	var def config.Definition
+	if err := c.get(ctx, "/api/v1/agents/by-id/"+agentID, &def); err != nil {
+		return nil, fmt.Errorf("get agent by id %q: %w", agentID, err)
+	}
+	return &def, nil
+}
+
 func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	var tools []ToolInfo
 	if err := c.get(ctx, "/api/v1/tools", &tools); err != nil {

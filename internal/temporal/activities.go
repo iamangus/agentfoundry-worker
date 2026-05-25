@@ -25,11 +25,11 @@ func NewActivities(orchClient *orchestrator.Client) *Activities {
 
 func (a *Activities) ResolveAgentActivity(ctx context.Context, input ResolveAgentInput) (ResolveAgentResult, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Info("resolving agent", "agent", input.AgentName)
+	logger.Info("resolving agent", "agent_id", input.AgentID)
 
-	def, err := a.orchClient.GetAgent(ctx, input.AgentName)
+	def, err := a.orchClient.GetAgentByID(ctx, input.AgentID)
 	if err != nil {
-		return ResolveAgentResult{}, fmt.Errorf("agent %q not found: %w", input.AgentName, err)
+		return ResolveAgentResult{}, fmt.Errorf("agent %q not found: %w", input.AgentID, err)
 	}
 	return ResolveAgentResult{Definition: def}, nil
 }
@@ -187,9 +187,9 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 			},
 		})
 		toolRoutes = append(toolRoutes, ToolRoute{
-			LLMName:   ref,
-			AgentName: ref,
-			Kind:      ToolKindAgent,
+			LLMName: ref,
+			AgentID: agentDef.AgentID,
+			Kind:    ToolKindAgent,
 		})
 	}
 

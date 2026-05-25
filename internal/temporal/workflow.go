@@ -38,7 +38,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	// 1. Resolve the agent definition.
 	var resolveResult ResolveAgentResult
 	err := workflow.ExecuteActivity(actCtx, (*Activities).ResolveAgentActivity, ResolveAgentInput{
-		AgentName: params.AgentName,
+		AgentID: params.AgentID,
 	}).Get(ctx, &resolveResult)
 	if err != nil {
 		return RunAgentResult{}, fmt.Errorf("resolve agent: %w", err)
@@ -266,18 +266,19 @@ func dispatchToolCall(
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &agentInput); err != nil {
 			return "", fmt.Errorf("parse agent call input: %w", err)
 		}
-		logger.Info("dispatching sub-agent", "agent", route.AgentName, "input_len", len(agentInput.Message))
+		logger.Info("dispatching sub-agent", "agent_id", route.AgentID, "input_len", len(agentInput.Message))
 
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			TaskQueue: TaskQueue,
 		})
 		var childResult RunAgentResult
 		err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
-			AgentName: route.AgentName,
+			AgentID:   route.AgentID,
+			AgentName: route.AgentID,
 			Message:   agentInput.Message,
 		}).Get(ctx, &childResult)
 		if err != nil {
-			return "", fmt.Errorf("sub-agent %s failed: %w", route.AgentName, err)
+			return "", fmt.Errorf("sub-agent %s failed: %w", route.AgentID, err)
 		}
 		return childResult.Response, nil
 
