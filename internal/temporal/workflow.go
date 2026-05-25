@@ -119,6 +119,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 			Request:   req,
 			StreamID:  params.StreamID,
 			LLMConfig: params.LLMConfig,
+			AgentID:   params.AgentID,
 		}).
 			Get(ctx, &llmResult)
 		if err != nil {

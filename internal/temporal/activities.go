@@ -101,23 +101,11 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 
 func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
 	cfg := llm.ClientConfig{
-		BaseURL:          "https://openrouter.ai/api/v1",
-		DefaultModel:     "openai/gpt-4o",
+		BaseURL:          strings.TrimRight(a.orchClient.BaseURL(), "/") + "/api/v1/inference/agents/" + input.AgentID,
+		APIKey:           a.orchClient.APIKey(),
 		SchemaValidation: false,
 	}
 	if input.LLMConfig != nil {
-		if input.LLMConfig.BaseURL != "" {
-			cfg.BaseURL = input.LLMConfig.BaseURL
-		}
-		if input.LLMConfig.APIKey != "" {
-			cfg.APIKey = input.LLMConfig.APIKey
-		}
-		if input.LLMConfig.DefaultModel != "" {
-			cfg.DefaultModel = input.LLMConfig.DefaultModel
-		}
-		if input.LLMConfig.Headers != nil {
-			cfg.Headers = input.LLMConfig.Headers
-		}
 		cfg.SchemaValidation = input.LLMConfig.SchemaValidation
 	}
 	return llm.NewClient(cfg)

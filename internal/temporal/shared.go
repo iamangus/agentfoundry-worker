@@ -11,11 +11,7 @@ const (
 )
 
 type LLMConfigInput struct {
-	BaseURL          string            `json:"base_url,omitempty"`
-	APIKey           string            `json:"api_key,omitempty"`
-	DefaultModel     string            `json:"default_model,omitempty"`
-	Headers          map[string]string `json:"headers,omitempty"`
-	SchemaValidation bool              `json:"schema_validation"`
+	SchemaValidation bool `json:"schema_validation"`
 }
 
 type RunAgentParams struct {
@@ -45,6 +41,7 @@ type LLMChatInput struct {
 	Request   *llm.ChatRequest `json:"request"`
 	StreamID  string           `json:"stream_id,omitempty"`
 	LLMConfig *LLMConfigInput  `json:"llm_config,omitempty"`
+	AgentID   string           `json:"agent_id"`
 }
 
 type LLMChatResult struct {

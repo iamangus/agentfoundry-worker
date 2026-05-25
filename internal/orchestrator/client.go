@@ -52,6 +52,9 @@ func NewClient(cfg Config) *Client {
 	}
 }
 
+func (c *Client) BaseURL() string { return c.baseURL }
+func (c *Client) APIKey() string  { return c.apiKey }
+
 func (c *Client) GetAgent(ctx context.Context, name string) (*config.Definition, error) {
 	var def config.Definition
 	if err := c.get(ctx, "/api/v1/agents/"+name, &def); err != nil {
