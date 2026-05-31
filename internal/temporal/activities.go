@@ -10,16 +10,19 @@ import (
 
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
+	"github.com/angoo/agentfoundry-worker/internal/memory"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
 
 type Activities struct {
-	orchClient *orchestrator.Client
+	orchClient   *orchestrator.Client
+	memoryClient *memory.Client
 }
 
-func NewActivities(orchClient *orchestrator.Client) *Activities {
+func NewActivities(orchClient *orchestrator.Client, memClient *memory.Client) *Activities {
 	return &Activities{
-		orchClient: orchClient,
+		orchClient:   orchClient,
+		memoryClient: memClient,
 	}
 }
 
@@ -200,4 +203,51 @@ func parseToolRef(ref string) (serverName, toolName string, ok bool) {
 		return "", "", false
 	}
 	return ref[:idx], ref[idx+1:], true
+}
+
+func (a *Activities) SearchMemoryActivity(ctx context.Context, input SearchMemoryInput) (SearchMemoryResult, error) {
+	logger := activity.GetLogger(ctx)
+	logger.Info("searching memory", "group", input.GroupID, "queries", len(input.Queries))
+
+	memClient := a.memoryClient
+	if memClient == nil {
+		return SearchMemoryResult{}, nil
+	}
+
+	allFacts := make(map[string]bool)
+	for _, query := range input.Queries {
+		facts, err := memClient.Search(ctx, input.GroupID, query, 5)
+		if err != nil {
+			logger.Warn("graphiti search query failed", "query", query, "error", err)
+			continue
+		}
+		for _, f := range facts {
+			allFacts[f.Fact] = true
+		}
+	}
+
+	factStrings := make([]string, 0, len(allFacts))
+	for f := range allFacts {
+		factStrings = append(factStrings, f)
+	}
+	return SearchMemoryResult{Facts: factStrings}, nil
+}
+
+func (a *Activities) IngestEpisodeActivity(ctx context.Context, input IngestEpisodeInput) error {
+	logger := activity.GetLogger(ctx)
+	logger.Info("ingesting episodes to memory", "group", input.GroupID, "episodes", len(input.Episodes))
+
+	memClient := a.memoryClient
+	if memClient == nil {
+		return nil
+	}
+
+	if len(input.Episodes) == 0 {
+		return nil
+	}
+
+	if err := memClient.IngestEpisodes(ctx, input.GroupID, input.Episodes); err != nil {
+		logger.Warn("graphiti ingest episodes failed", "error", err)
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"github.com/angoo/agentfoundry-worker/internal/config"
+	"github.com/angoo/agentfoundry-worker/internal/memory"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
 
@@ -14,7 +15,7 @@ type Worker struct {
 	activities *Activities
 }
 
-func NewWorker(tcfg config.TemporalConf, orchClient *orchestrator.Client) (*Worker, error) {
+func NewWorker(tcfg config.TemporalConf, orchClient *orchestrator.Client, memClient *memory.Client) (*Worker, error) {
 	opts := client.Options{
 		HostPort:  tcfg.HostPort,
 		Namespace: tcfg.Namespace,
@@ -28,7 +29,7 @@ func NewWorker(tcfg config.TemporalConf, orchClient *orchestrator.Client) (*Work
 		return nil, err
 	}
 
-	acts := NewActivities(orchClient)
+	acts := NewActivities(orchClient, memClient)
 
 	w := worker.New(c, TaskQueue, worker.Options{})
 	w.RegisterWorkflow(RunAgentWorkflow)

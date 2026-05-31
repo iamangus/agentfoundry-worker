@@ -10,6 +10,7 @@ import (
 type SystemConfig struct {
 	Temporal     TemporalConf     `yaml:"temporal"`
 	Orchestrator OrchestratorConf `yaml:"orchestrator"`
+	GraphitiURL  string           `yaml:"graphiti_url"`
 }
 
 type TemporalConf struct {
@@ -48,6 +49,7 @@ func DefaultSystem() *SystemConfig {
 			URL:    orchURL,
 			APIKey: os.Getenv("ORCHESTRATOR_API_KEY"),
 		},
+		GraphitiURL: os.Getenv("GRAPHITI_URL"),
 	}
 }
 
@@ -90,6 +92,11 @@ func LoadSystem(path string) (*SystemConfig, error) {
 	}
 	if cfg.Orchestrator.APIKey == "" {
 		cfg.Orchestrator.APIKey = os.Getenv("ORCHESTRATOR_API_KEY")
+	}
+
+	cfg.GraphitiURL = expandEnvVar(cfg.GraphitiURL)
+	if cfg.GraphitiURL == "" {
+		cfg.GraphitiURL = os.Getenv("GRAPHITI_URL")
 	}
 
 	return cfg, nil

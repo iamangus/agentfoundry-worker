@@ -3,6 +3,7 @@ package temporal
 import (
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
+	"github.com/angoo/agentfoundry-worker/internal/memory"
 )
 
 const (
@@ -22,6 +23,9 @@ type RunAgentParams struct {
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 	StreamID       string                   `json:"stream_id,omitempty"`
 	LLMConfig      *LLMConfigInput          `json:"llm_config,omitempty"`
+	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
+	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
+	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
 }
 
 type RunAgentResult struct {
@@ -73,4 +77,26 @@ type ToolRoute struct {
 	ServerName string   `json:"server_name,omitempty"`
 	ToolName   string   `json:"tool_name,omitempty"`
 	AgentID    string   `json:"agent_id,omitempty"`
+}
+
+type SearchMemoryInput struct {
+	Queries []string `json:"queries"`
+	GroupID string   `json:"group_id"`
+}
+
+type SearchMemoryResult struct {
+	Facts []string `json:"facts"`
+}
+
+type IngestEpisodeInput struct {
+	Episodes []memory.Episode `json:"episodes"`
+	GroupID  string           `json:"group_id"`
+}
+
+type MemorySearchAgentOutput struct {
+	Queries []string `json:"queries"`
+}
+
+type MemoryIngestAgentOutput struct {
+	Episodes []memory.Episode `json:"episodes"`
 }

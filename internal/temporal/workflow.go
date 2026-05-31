@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/angoo/agentfoundry-worker/internal/llm"
+	"github.com/angoo/agentfoundry-worker/internal/memory"
 )
 
 var defaultActivityOptions = workflow.ActivityOptions{
@@ -69,6 +70,30 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 
 	// 4. Build initial messages: system prompt + history + user message.
 	systemPrompt := def.SystemPrompt
+
+	// 4a. Memory search: invoke memory search agent for queries, then search Graphiti.
+	if params.MemoryEnabled && params.MemorySearchAgentID != "" {
+		queries, err := invokeMemorySearchAgent(ctx, params, def.Name)
+		if err != nil {
+			logger.Warn("memory search agent failed", "error", err)
+		} else if len(queries) > 0 {
+			var memResult SearchMemoryResult
+			err = workflow.ExecuteActivity(actCtx, (*Activities).SearchMemoryActivity, SearchMemoryInput{
+				GroupID: def.AgentID,
+				Queries: queries,
+			}).Get(ctx, &memResult)
+			if err != nil {
+				logger.Warn("memory search failed", "agent", def.Name, "error", err)
+			} else if len(memResult.Facts) > 0 {
+				var factLines string
+				for _, f := range memResult.Facts {
+					factLines += "\n- " + f
+				}
+				systemPrompt += fmt.Sprintf("\n\n[Relevant context from past interactions]\n%s", factLines)
+			}
+		}
+	}
+
 	if so != nil && !supportsSchema {
 		systemPrompt += fmt.Sprintf(
 			"\n\nYou must respond with ONLY valid JSON matching this schema:\n%s",
@@ -192,10 +217,23 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 			}
 
 			logger.Info("agent workflow completed", "agent", def.Name, "turns", turn+1)
-			return RunAgentResult{
+			finalResult := RunAgentResult{
 				Response: content,
 				History:  messages[1:],
-			}, nil
+			}
+
+		if params.MemoryEnabled && params.MemoryIngestAgentID != "" {
+			episodes, err := invokeMemoryIngestAgent(ctx, params, messages, def.Name)
+			if err != nil {
+				logger.Warn("memory ingest agent failed", "error", err)
+			} else if len(episodes) > 0 {
+				_ = workflow.ExecuteActivity(actCtx, (*Activities).IngestEpisodeActivity, IngestEpisodeInput{
+					GroupID:  def.AgentID,
+					Episodes: episodes,
+				}).Get(ctx, nil)
+			}
+		}
+			return finalResult, nil
 		}
 
 		type toolCallOutcome struct {
@@ -309,4 +347,83 @@ func dispatchToolCall(
 	default:
 		return "", fmt.Errorf("unknown tool kind %q for tool %s", route.Kind, tc.Function.Name)
 	}
+}
+
+func invokeMemorySearchAgent(ctx workflow.Context, params RunAgentParams, agentName string) ([]string, error) {
+	task := fmt.Sprintf(
+		"Given the following user message and conversation history, generate search queries to retrieve relevant past facts from a knowledge graph.\n\n"+
+			"User message: %s\n\n"+
+			"Generate 1-5 diverse semantic search queries that would surface relevant memories about this user, their preferences, past interactions, and related topics.",
+		params.Message,
+	)
+
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		TaskQueue: TaskQueue,
+	})
+	var childResult RunAgentResult
+	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
+		AgentID:        params.MemorySearchAgentID,
+		AgentName:      params.MemorySearchAgentID,
+		Message:        task,
+		History:        params.History,
+		MemoryEnabled:  false,
+	}).Get(ctx, &childResult)
+	if err != nil {
+		return nil, err
+	}
+
+	var output MemorySearchAgentOutput
+	if err := json.Unmarshal([]byte(childResult.Response), &output); err != nil {
+		// Try cleaning code fences
+		cleaned := llm.StripCodeFences(childResult.Response)
+		if err2 := json.Unmarshal([]byte(cleaned), &output); err2 != nil {
+			return nil, fmt.Errorf("parse memory search agent response: %w (original: %w)", err2, err)
+		}
+	}
+	return output.Queries, nil
+}
+
+func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messages []llm.Message, agentName string) ([]memory.Episode, error) {
+	var turnStr string
+	for _, m := range messages {
+		content, _ := m.Content.(string)
+		if content == "" {
+			continue
+		}
+		role := m.Role
+		if role == "tool" {
+			role = "tool_result"
+		}
+		turnStr += fmt.Sprintf("[%s] %s\n", role, content)
+	}
+
+	task := fmt.Sprintf(
+		"Given the following conversation turn, extract distinct episodes to store in a knowledge graph.\n\n"+
+			"Turn context:\n%s\n\n"+
+			"Extract 0-5 distinct episodes from this turn. Each episode should be a self-contained piece of information that could be useful in future interactions.",
+		turnStr,
+	)
+
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		TaskQueue: TaskQueue,
+	})
+	var childResult RunAgentResult
+	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
+		AgentID:        params.MemoryIngestAgentID,
+		AgentName:      params.MemoryIngestAgentID,
+		Message:        task,
+		MemoryEnabled:  false,
+	}).Get(ctx, &childResult)
+	if err != nil {
+		return nil, err
+	}
+
+	var output MemoryIngestAgentOutput
+	if err := json.Unmarshal([]byte(childResult.Response), &output); err != nil {
+		cleaned := llm.StripCodeFences(childResult.Response)
+		if err2 := json.Unmarshal([]byte(cleaned), &output); err2 != nil {
+			return nil, fmt.Errorf("parse memory ingest agent response: %w (original: %w)", err2, err)
+		}
+	}
+	return output.Episodes, nil
 }

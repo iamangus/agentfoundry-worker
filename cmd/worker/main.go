@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/angoo/agentfoundry-worker/internal/config"
+	"github.com/angoo/agentfoundry-worker/internal/memory"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 	agentworker "github.com/angoo/agentfoundry-worker/internal/temporal"
 )
@@ -22,6 +23,7 @@ func main() {
 		"temporal_host", cfg.Temporal.HostPort,
 		"temporal_namespace", cfg.Temporal.Namespace,
 		"orchestrator_url", cfg.Orchestrator.URL,
+		"graphiti_url", cfg.GraphitiURL,
 	)
 
 	orchClient := orchestrator.NewClient(orchestrator.Config{
@@ -29,7 +31,13 @@ func main() {
 		APIKey: cfg.Orchestrator.APIKey,
 	})
 
-	w, err := agentworker.NewWorker(cfg.Temporal, orchClient)
+	var memClient *memory.Client
+	if cfg.GraphitiURL != "" {
+		memClient = memory.NewClient(cfg.GraphitiURL)
+		slog.Info("graphiti memory client configured", "url", cfg.GraphitiURL)
+	}
+
+	w, err := agentworker.NewWorker(cfg.Temporal, orchClient, memClient)
 	if err != nil {
 		slog.Error("failed to create Temporal worker", "error", err)
 		os.Exit(1)
