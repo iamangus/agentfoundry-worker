@@ -1,8 +1,12 @@
 package memory
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role              string `json:"role"`
+	RoleType          string `json:"role_type"`
+	Content           string `json:"content"`
+	Name              string `json:"name,omitempty"`
+	SourceDescription string `json:"source_description,omitempty"`
+	Timestamp         string `json:"timestamp"`
 }
 
 type Episode struct {

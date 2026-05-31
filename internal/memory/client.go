@@ -71,12 +71,16 @@ func (c *Client) IngestMessages(ctx context.Context, groupID string, messages []
 
 func (c *Client) IngestEpisodes(ctx context.Context, groupID string, episodes []Episode) error {
 	messages := make([]Message, len(episodes))
+	now := time.Now().UTC().Format(time.RFC3339)
 	for i, ep := range episodes {
-		content := ep.Content
-		if ep.Name != "" {
-			content = "[" + ep.Name + "] " + content
+		messages[i] = Message{
+			Role:              "user",
+			RoleType:          "user",
+			Content:           ep.Content,
+			Name:              ep.Name,
+			SourceDescription: ep.SourceDescription,
+			Timestamp:         now,
 		}
-		messages[i] = Message{Role: "user", Content: content}
 	}
 	return c.IngestMessages(ctx, groupID, messages)
 }
