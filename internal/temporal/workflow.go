@@ -309,6 +309,10 @@ func dispatchToolCall(
 
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 			TaskQueue: TaskQueue,
+			SearchAttributes: map[string]interface{}{
+				"AgentName": route.AgentName,
+				"RunType":   "direct",
+			},
 		})
 		var childResult RunAgentResult
 		err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
@@ -368,6 +372,10 @@ func invokeMemorySearchAgent(ctx workflow.Context, params RunAgentParams, agentN
 
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		TaskQueue: TaskQueue,
+		SearchAttributes: map[string]interface{}{
+			"AgentName": childDisplayName,
+			"RunType":   "direct",
+		},
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
@@ -424,6 +432,10 @@ func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messag
 
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		TaskQueue: TaskQueue,
+		SearchAttributes: map[string]interface{}{
+			"AgentName": childDisplayName,
+			"RunType":   "direct",
+		},
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
