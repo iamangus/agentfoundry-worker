@@ -178,9 +178,10 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 			},
 		})
 		toolRoutes = append(toolRoutes, ToolRoute{
-			LLMName: ref,
-			AgentID: agentDef.AgentID,
-			Kind:    ToolKindAgent,
+			LLMName:   ref,
+			AgentID:   agentDef.AgentID,
+			AgentName: agentDef.Name,
+			Kind:      ToolKindAgent,
 		})
 	}
 

@@ -313,7 +313,7 @@ func dispatchToolCall(
 		var childResult RunAgentResult
 		err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
 			AgentID:   route.AgentID,
-			AgentName: route.AgentID,
+			AgentName: route.AgentName,
 			Message:   agentInput.Message,
 		}).Get(ctx, &childResult)
 		if err != nil {
@@ -357,13 +357,22 @@ func invokeMemorySearchAgent(ctx workflow.Context, params RunAgentParams, agentN
 		params.Message,
 	)
 
+	actCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions)
+	var resolveResult ResolveAgentResult
+	if err := workflow.ExecuteActivity(actCtx, (*Activities).ResolveAgentActivity, ResolveAgentInput{
+		AgentID: params.MemorySearchAgentID,
+	}).Get(ctx, &resolveResult); err != nil {
+		return nil, err
+	}
+	childDisplayName := resolveResult.Definition.Name
+
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		TaskQueue: TaskQueue,
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
 		AgentID:        params.MemorySearchAgentID,
-		AgentName:      params.MemorySearchAgentID,
+		AgentName:      childDisplayName,
 		Message:        task,
 		History:        params.History,
 		MemoryEnabled:  false,
@@ -404,13 +413,22 @@ func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messag
 		turnStr,
 	)
 
+	actCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions)
+	var resolveResult ResolveAgentResult
+	if err := workflow.ExecuteActivity(actCtx, (*Activities).ResolveAgentActivity, ResolveAgentInput{
+		AgentID: params.MemoryIngestAgentID,
+	}).Get(ctx, &resolveResult); err != nil {
+		return nil, err
+	}
+	childDisplayName := resolveResult.Definition.Name
+
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		TaskQueue: TaskQueue,
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
 		AgentID:        params.MemoryIngestAgentID,
-		AgentName:      params.MemoryIngestAgentID,
+		AgentName:      childDisplayName,
 		Message:        task,
 		MemoryEnabled:  false,
 	}).Get(ctx, &childResult)

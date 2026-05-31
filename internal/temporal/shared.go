@@ -77,6 +77,7 @@ type ToolRoute struct {
 	ServerName string   `json:"server_name,omitempty"`
 	ToolName   string   `json:"tool_name,omitempty"`
 	AgentID    string   `json:"agent_id,omitempty"`
+	AgentName  string   `json:"agent_name,omitempty"`
 }
 
 type SearchMemoryInput struct {
