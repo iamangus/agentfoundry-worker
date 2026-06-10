@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"strings"
+
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -330,6 +332,15 @@ func dispatchToolCall(
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parse tool arguments: %w", err)
 		}
+
+	for _, o := range route.Overrides {
+		val := resolveOverrideValue(o.Value, params)
+		_, exists := args[o.Param]
+		if o.Force || !exists {
+			args[o.Param] = val
+		}
+	}
+
 		logger.Info("dispatching MCP tool", "server", route.ServerName, "tool", route.ToolName)
 
 		actCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions)
@@ -351,6 +362,15 @@ func dispatchToolCall(
 	default:
 		return "", fmt.Errorf("unknown tool kind %q for tool %s", route.Kind, tc.Function.Name)
 	}
+}
+
+func resolveOverrideValue(value string, params RunAgentParams) string {
+	r := strings.NewReplacer(
+		"${agentID}", params.AgentID,
+		"${agentName}", params.AgentName,
+		"${userSubject}", params.UserSubject,
+	)
+	return r.Replace(value)
 }
 
 func invokeMemorySearchAgent(ctx workflow.Context, params RunAgentParams, agentName string) ([]string, error) {

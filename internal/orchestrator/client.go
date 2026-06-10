@@ -29,6 +29,7 @@ type ToolInfo struct {
 	Name          string          `json:"name"`
 	Description   string          `json:"description"`
 	InputSchema   json.RawMessage `json:"input_schema"`
+	ToolOverrides json.RawMessage `json:"tool_overrides,omitempty"`
 }
 
 type mcpCallRequest struct {

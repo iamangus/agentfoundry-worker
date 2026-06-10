@@ -110,6 +110,8 @@ func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
 	}
 	if input.LLMConfig != nil {
 		cfg.SchemaValidation = input.LLMConfig.SchemaValidation
+		cfg.Reasoning = input.LLMConfig.Reasoning
+		cfg.ModelParams = input.LLMConfig.ModelParams
 	}
 	return llm.NewClient(cfg)
 }
@@ -154,13 +156,14 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 					Parameters:  params,
 				},
 			})
-			toolRoutes = append(toolRoutes, ToolRoute{
-				LLMName:    llmName,
-				ServerName: serverName,
-				ToolName:   toolName,
-				Kind:       ToolKindMCP,
-			})
-			continue
+		toolRoutes = append(toolRoutes, ToolRoute{
+			LLMName:    llmName,
+			ServerName: serverName,
+			ToolName:   toolName,
+			Kind:       ToolKindMCP,
+			Overrides:  mergeOverrides(input.Definition.ToolOverrides, ti.ToolOverrides, serverName, toolName),
+		})
+		continue
 		}
 
 		agentDef, err := a.orchClient.GetAgent(ctx, ref)
@@ -196,6 +199,75 @@ type BuildToolDefsInput struct {
 type BuildToolDefsResult struct {
 	ToolDefs   []llm.ToolDef `json:"tool_defs"`
 	ToolRoutes []ToolRoute   `json:"tool_routes"`
+}
+
+func mergeOverrides(agentOverrides, serverOverrides json.RawMessage, serverName, toolName string) []ToolOverride {
+	var result []ToolOverride
+
+	parseMap := func(raw json.RawMessage) map[string]map[string]struct {
+		Value string `json:"value"`
+		Force bool   `json:"force"`
+	} {
+		if len(raw) == 0 {
+			return nil
+		}
+		var m map[string]map[string]struct {
+			Value string `json:"value"`
+			Force bool   `json:"force"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil
+		}
+		return m
+	}
+
+	seen := make(map[string]bool)
+
+	addOverrides := func(overridesMap map[string]map[string]struct {
+		Value string `json:"value"`
+		Force bool   `json:"force"`
+	}) {
+		for key, toolOverrides := range overridesMap {
+			if key != "*" && key != toolName {
+				continue
+			}
+			for param, o := range toolOverrides {
+				if seen[param] {
+					continue
+				}
+				seen[param] = true
+				result = append(result, ToolOverride{
+					Param: param,
+					Value: o.Value,
+					Force: o.Force,
+				})
+			}
+		}
+	}
+
+	key := serverName + "." + toolName
+
+	// server overrides apply first (* wildcard), then agent-specific (agent wins)
+	if m := parseMap(serverOverrides); m != nil {
+		addOverrides(m)
+	}
+	if m := parseMap(agentOverrides); m != nil {
+		if toolOverrides, ok := m[key]; ok {
+			for param, o := range toolOverrides {
+				if seen[param] {
+					continue
+				}
+				seen[param] = true
+				result = append(result, ToolOverride{
+					Param: param,
+					Value: o.Value,
+					Force: o.Force,
+				})
+			}
+		}
+	}
+
+	return result
 }
 
 func parseToolRef(ref string) (serverName, toolName string, ok bool) {

@@ -1,6 +1,8 @@
 package temporal
 
 import (
+	"encoding/json"
+
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
@@ -12,7 +14,9 @@ const (
 )
 
 type LLMConfigInput struct {
-	SchemaValidation bool `json:"schema_validation"`
+	SchemaValidation bool            `json:"schema_validation"`
+	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
+	ModelParams      json.RawMessage `json:"model_params,omitempty"`
 }
 
 type RunAgentParams struct {
@@ -26,6 +30,7 @@ type RunAgentParams struct {
 	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
+	UserSubject         string                   `json:"user_subject,omitempty"`
 }
 
 type RunAgentResult struct {
@@ -71,13 +76,20 @@ const (
 	ToolKindAgent ToolKind = "agent"
 )
 
+type ToolOverride struct {
+	Param string `json:"param"`
+	Value string `json:"value"`
+	Force bool   `json:"force"`
+}
+
 type ToolRoute struct {
-	LLMName    string   `json:"llm_name"`
-	Kind       ToolKind `json:"kind"`
-	ServerName string   `json:"server_name,omitempty"`
-	ToolName   string   `json:"tool_name,omitempty"`
-	AgentID    string   `json:"agent_id,omitempty"`
-	AgentName  string   `json:"agent_name,omitempty"`
+	LLMName    string         `json:"llm_name"`
+	Kind       ToolKind       `json:"kind"`
+	ServerName string         `json:"server_name,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	AgentID    string         `json:"agent_id,omitempty"`
+	AgentName  string         `json:"agent_name,omitempty"`
+	Overrides  []ToolOverride `json:"overrides,omitempty"`
 }
 
 type SearchMemoryInput struct {
