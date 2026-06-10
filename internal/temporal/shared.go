@@ -1,8 +1,6 @@
 package temporal
 
 import (
-	"encoding/json"
-
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
@@ -14,9 +12,7 @@ const (
 )
 
 type LLMConfigInput struct {
-	SchemaValidation bool            `json:"schema_validation"`
-	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
-	ModelParams      json.RawMessage `json:"model_params,omitempty"`
+	SchemaValidation bool `json:"schema_validation"`
 }
 
 type RunAgentParams struct {

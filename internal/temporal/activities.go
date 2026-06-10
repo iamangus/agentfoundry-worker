@@ -110,8 +110,6 @@ func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
 	}
 	if input.LLMConfig != nil {
 		cfg.SchemaValidation = input.LLMConfig.SchemaValidation
-		cfg.Reasoning = input.LLMConfig.Reasoning
-		cfg.ModelParams = input.LLMConfig.ModelParams
 	}
 	return llm.NewClient(cfg)
 }

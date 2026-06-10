@@ -36,9 +36,6 @@ type ClientConfig struct {
 	Headers map[string]string
 
 	SchemaValidation bool
-
-	Reasoning   json.RawMessage
-	ModelParams json.RawMessage
 }
 
 // OpenAIClient implements Client for any OpenAI-compatible API.
@@ -49,8 +46,6 @@ type OpenAIClient struct {
 	headers          map[string]string
 	httpClient       *http.Client
 	schemaValidation bool
-	reasoning        json.RawMessage
-	modelParams      json.RawMessage
 }
 
 // NewClient creates a new OpenAI-compatible LLM client.
@@ -66,30 +61,7 @@ func NewClient(cfg ClientConfig) *OpenAIClient {
 		headers:          cfg.Headers,
 		httpClient:       &http.Client{Timeout: 120 * time.Second},
 		schemaValidation: cfg.SchemaValidation,
-		reasoning:        cfg.Reasoning,
-		modelParams:      cfg.ModelParams,
 	}
-}
-
-func (c *OpenAIClient) mergeBody(base []byte, extra json.RawMessage) []byte {
-	if len(extra) == 0 || bytes.Equal(extra, []byte("{}")) || bytes.Equal(extra, []byte("null")) {
-		return base
-	}
-	var baseMap, extraMap map[string]any
-	if err := json.Unmarshal(base, &baseMap); err != nil {
-		return base
-	}
-	if err := json.Unmarshal(extra, &extraMap); err != nil {
-		return base
-	}
-	for k, v := range extraMap {
-		baseMap[k] = v
-	}
-	merged, err := json.Marshal(baseMap)
-	if err != nil {
-		return base
-	}
-	return merged
 }
 
 func (c *OpenAIClient) SupportsSchemaValidation() bool {
@@ -223,30 +195,6 @@ func isRetryableHTTP(statusCode int) bool {
 	return false
 }
 
-func isNonEmptyJSON(raw json.RawMessage) bool {
-	return len(raw) > 0 && !bytes.Equal(raw, []byte("{}")) && !bytes.Equal(raw, []byte("null"))
-}
-
-func mergeBody(base []byte, extras ...json.RawMessage) ([]byte, error) {
-	var m map[string]any
-	if err := json.Unmarshal(base, &m); err != nil {
-		return nil, err
-	}
-	for _, extra := range extras {
-		if !isNonEmptyJSON(extra) {
-			continue
-		}
-		var e map[string]any
-		if err := json.Unmarshal(extra, &e); err != nil {
-			continue
-		}
-		for k, v := range e {
-			m[k] = v
-		}
-	}
-	return json.Marshal(m)
-}
-
 // ChatCompletion sends a chat completion request to the configured API endpoint.
 // Transient errors (429, 500, 502, 503, 504) and network errors are retried
 // with exponential backoff: 1s, 3s, 7s, then every 10s up to maxRetries.
@@ -258,10 +206,6 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-	body, err = mergeBody(body, c.reasoning, c.modelParams)
-	if err != nil {
-		return nil, fmt.Errorf("merge extra params: %w", err)
 	}
 
 	backoffSchedule := []time.Duration{
@@ -354,8 +298,6 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-	body = c.mergeBody(body, c.reasoning)
-	body = c.mergeBody(body, c.modelParams)
 
 	streamClient := &http.Client{Timeout: 5 * time.Minute}
 
