@@ -367,11 +367,25 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 				for len(accumulatedToolCalls) <= idx {
 					accumulatedToolCalls = append(accumulatedToolCalls, ToolCall{})
 				}
-				accumulatedToolCalls[idx].Type = tc.Type
+				// Guard Type against empty-string overwrite: only the first
+				// delta for a given tool-call index carries "type":"function";
+				// subsequent argument-streaming deltas omit it. Clobbering
+				// Type back to "" caused Azure to silently drop the tool_call,
+				// orphaning the subsequent {role:"tool", tool_call_id:...}
+				// messages and producing a 400 on the next turn.
+				if tc.Type != "" {
+					accumulatedToolCalls[idx].Type = tc.Type
+				}
 				if tc.ID != "" {
 					accumulatedToolCalls[idx].ID = tc.ID
 				}
-				accumulatedToolCalls[idx].Function.Name += tc.Function.Name
+				// Guard Function.Name symmetrically against providers that
+				// split the name across multiple deltas with empty trailing
+				// fragments.
+				if tc.Function.Name != "" {
+					accumulatedToolCalls[idx].Function.Name += tc.Function.Name
+				}
+				// Arguments are intentionally append-only (streamed).
 				accumulatedToolCalls[idx].Function.Arguments += tc.Function.Arguments
 				accumulatedToolCalls[idx].Index = tc.Index
 			}
@@ -386,6 +400,38 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 		slog.Warn("stream scanner error", "error", err)
 	}
 
+	// Post-stream normalization: repair any provider quirks that would
+	// otherwise produce a malformed assistant message on the next turn.
+	//
+	// 1. Default role to "assistant" if the provider never sent a role delta
+	//    (some providers omit it on tool-call-only responses).
+	if role == "" {
+		role = "assistant"
+	}
+	// 2. Repair any tool_call that ended up with empty Type or ID. Empty Type
+	//    causes Azure/OpenAI to silently drop the tool_call, orphaning the
+	//    subsequent {role:"tool", tool_call_id:...} messages. Empty ID makes
+	//    it impossible to pair the tool output with the call.
+	for i := range accumulatedToolCalls {
+		if accumulatedToolCalls[i].Type == "" {
+			accumulatedToolCalls[i].Type = "function"
+		}
+		if accumulatedToolCalls[i].ID == "" {
+			accumulatedToolCalls[i].ID = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
+			slog.Warn("streaming accumulator: synthesized missing tool_call ID",
+				"synthetic_id", accumulatedToolCalls[i].ID,
+				"index", i,
+				"function", accumulatedToolCalls[i].Function.Name)
+		}
+	}
+	// 3. For tool-call-only assistant messages, an empty-string content can
+	//    cause strict providers to reject the message. Coerce to nil so the
+	//    omit-empty tag drops the field entirely.
+	finalContent := any(accumulatedContent)
+	if accumulatedContent == "" && len(accumulatedToolCalls) > 0 {
+		finalContent = nil
+	}
+
 	result := &ChatResponse{
 		ID: chunkID,
 		Choices: []Choice{
@@ -393,7 +439,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 				Index: 0,
 				Message: Message{
 					Role:      role,
-					Content:   accumulatedContent,
+					Content:   finalContent,
 					ToolCalls: accumulatedToolCalls,
 				},
 				FinishReason: "stop",
@@ -510,4 +556,123 @@ func ValidateAgainstSchema(content string, schema json.RawMessage) error {
 		return err
 	}
 	return nil
+}
+
+// NormalizeMessages repairs common provider-induced malformations in a chat
+// message slice before it is sent to an OpenAI-compatible endpoint. It is
+// idempotent and safe to call on every turn.
+//
+// Responsibilities:
+//  1. Force empty assistant tool_call.Type to "function" (Azure silently drops
+//     tool_calls with empty Type, orphaning subsequent tool messages).
+//  2. Assign a synthetic ID to any assistant tool_call with an empty ID, and
+//     expose it via the known-id set so subsequent tool messages can reference
+//     it.
+//  3. Drop any tool message whose ToolCallID is not declared by a preceding
+//     assistant message's tool_calls. This is the specific guarantee that
+//     prevents "No tool call found for function call output with call_id ..."
+//     400 errors from Azure/OpenAI, regardless of upstream cause.
+//  4. Default an empty assistant Role to "assistant".
+//  5. For tool-call-only assistant messages, coerce empty-string Content to
+//     nil so the json:"content,omitempty" tag drops the field entirely.
+//  6. Dedupe consecutive assistant messages that declare the exact same set
+//     of tool_call IDs as the immediately preceding one (guards against
+//     retry/replay duplication).
+//
+// All repairs log via slog.Warn so future provider quirks remain diagnosable.
+func NormalizeMessages(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	out := make([]Message, 0, len(msgs))
+	knownToolCallIDs := make(map[string]struct{})
+	var prevAssistantToolCallIDs []string
+
+	for _, m := range msgs {
+		// (4) Default Role: an empty Role almost always means a
+		// tool-call-bearing (or text-only) assistant message
+		// constructed upstream without an explicit role — e.g. the
+		// streaming accumulator when the provider never sent a role
+		// delta. Treat any empty-role message as "assistant" and
+		// apply the assistant branch's repairs. This also makes the
+		// switch below hit the assistant case for empty-role messages.
+		if m.Role == "" {
+			m.Role = "assistant"
+		}
+
+		switch m.Role {
+		case "assistant":
+
+			// (1) + (2) Repair each tool_call.
+			var thisAssistantToolCallIDs []string
+			for i := range m.ToolCalls {
+				if m.ToolCalls[i].Type == "" {
+					m.ToolCalls[i].Type = "function"
+				}
+				if m.ToolCalls[i].ID == "" {
+					syntheticID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), i)
+					slog.Warn("NormalizeMessages: synthesized missing tool_call ID",
+						"synthetic_id", syntheticID,
+						"index", i,
+						"function", m.ToolCalls[i].Function.Name)
+					m.ToolCalls[i].ID = syntheticID
+				}
+				knownToolCallIDs[m.ToolCalls[i].ID] = struct{}{}
+				thisAssistantToolCallIDs = append(thisAssistantToolCallIDs, m.ToolCalls[i].ID)
+			}
+
+			// (6) Dedupe: drop consecutive assistant messages declaring the
+			//     exact same set of tool_call IDs as the previous one.
+			if len(thisAssistantToolCallIDs) > 0 && len(prevAssistantToolCallIDs) > 0 {
+				same := len(thisAssistantToolCallIDs) == len(prevAssistantToolCallIDs)
+				for i := range thisAssistantToolCallIDs {
+					if !same {
+						break
+					}
+					if thisAssistantToolCallIDs[i] != prevAssistantToolCallIDs[i] {
+						same = false
+					}
+				}
+				if same {
+					slog.Warn("NormalizeMessages: dropping duplicate assistant tool_call replay",
+						"tool_call_ids", thisAssistantToolCallIDs)
+					// Don't touch knownToolCallIDs; the first occurrence is
+					// already registered.
+					continue
+				}
+			}
+
+			// (5) Coerce empty-string Content to nil for tool-call-only
+			//     assistant messages.
+			if len(m.ToolCalls) > 0 {
+				if s, ok := m.Content.(string); ok && s == "" {
+					m.Content = nil
+				}
+			}
+
+			out = append(out, m)
+			prevAssistantToolCallIDs = thisAssistantToolCallIDs
+
+		case "tool":
+			// (3) Drop orphaned tool messages. A tool message is orphaned if
+			// its ToolCallID is not declared by any preceding assistant
+			// message. This is the guarantee that prevents the
+			// "No tool call found for function call output with call_id ..."
+			// 400 from Azure/OpenAI.
+			if _, ok := knownToolCallIDs[m.ToolCallID]; !ok {
+				slog.Warn("NormalizeMessages: dropping orphaned tool message",
+					"tool_call_id", m.ToolCallID)
+				continue
+			}
+			out = append(out, m)
+			prevAssistantToolCallIDs = nil
+
+		default:
+			out = append(out, m)
+			prevAssistantToolCallIDs = nil
+		}
+	}
+
+	return out
 }

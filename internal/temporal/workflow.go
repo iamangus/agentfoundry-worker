@@ -119,6 +119,14 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	for turn := 0; turn < maxTurns; turn++ {
 		logger.Info("agent turn", "agent", def.Name, "turn", turn+1)
 
+		// Defensive net: repair any provider-induced malformations (empty
+		// tool_call.Type, missing tool_call IDs, orphaned tool messages)
+		// before sending. Idempotent — no-op on healthy streams. This is the
+		// guarantee that prevents "No tool call found for function call
+		// output with call_id ..." 400s from Azure/OpenAI regardless of
+		// upstream cause.
+		messages = llm.NormalizeMessages(messages)
+
 		req := &llm.ChatRequest{
 			Model:    def.Model,
 			Messages: messages,
