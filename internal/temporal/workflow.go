@@ -134,7 +134,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 			Model:    def.Model,
 			Messages: messages,
 		}
-		if len(toolDefsResult.ToolDefs) > 0 {
+		if len(toolDefsResult.ToolDefs) > 0 && turn < maxTurns-1 {
 			req.Tools = toolDefsResult.ToolDefs
 		}
 		if so != nil && supportsSchema {
