@@ -61,3 +61,24 @@ system_prompt: Hello.
 		t.Errorf("expected StructuredOutput to be nil, got %+v", def.StructuredOutput)
 	}
 }
+
+func TestHandoff_YAMLRoundTrip(t *testing.T) {
+	input := `kind: agent
+name: triage
+system_prompt: You triage requests.
+handoff_to: resolver
+handoffs:
+    - billing
+    - support
+`
+	var def config.Definition
+	if err := yaml.Unmarshal([]byte(input), &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if def.HandoffTo != "resolver" {
+		t.Errorf("got HandoffTo=%q, want %q", def.HandoffTo, "resolver")
+	}
+	if len(def.Handoffs) != 2 || def.Handoffs[0] != "billing" || def.Handoffs[1] != "support" {
+		t.Errorf("got Handoffs=%v, want [billing support]", def.Handoffs)
+	}
+}

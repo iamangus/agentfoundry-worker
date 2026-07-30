@@ -186,8 +186,46 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 		})
 	}
 
+	for _, targetName := range input.Definition.Handoffs {
+		agentDef, err := a.orchClient.GetAgent(ctx, targetName)
+		if err != nil {
+			logger.Warn("handoff references unresolvable agent, skipping tool", "agent", input.Definition.Name, "target", targetName)
+			continue
+		}
+		llmName := "handoff_to_" + targetName
+		handoffSchema := json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"The message to forward to this agent on handoff"}},"required":["message"]}`)
+		toolDefs = append(toolDefs, llm.ToolDef{
+			Type: "function",
+			Function: llm.FunctionDef{
+				Name:        llmName,
+				Description: "Hand off the conversation to " + targetName,
+				Parameters:  handoffSchema,
+			},
+		})
+		toolRoutes = append(toolRoutes, ToolRoute{
+			LLMName:   llmName,
+			AgentID:   agentDef.AgentID,
+			AgentName: agentDef.Name,
+			Kind:      ToolKindHandoff,
+		})
+	}
+
+	result := BuildToolDefsResult{ToolDefs: toolDefs, ToolRoutes: toolRoutes}
+	if input.Definition.HandoffTo != "" {
+		hd, err := a.orchClient.GetAgent(ctx, input.Definition.HandoffTo)
+		if err != nil {
+			logger.Warn("deterministic handoff target unresolvable", "agent", input.Definition.Name, "target", input.Definition.HandoffTo)
+		} else {
+			result.HandoffTo = &ToolRoute{
+				AgentID:   hd.AgentID,
+				AgentName: hd.Name,
+				Kind:      ToolKindHandoff,
+			}
+		}
+	}
+
 	logger.Info("tool set built", "agent", input.Definition.Name, "tools", len(toolDefs))
-	return BuildToolDefsResult{ToolDefs: toolDefs, ToolRoutes: toolRoutes}, nil
+	return result, nil
 }
 
 type BuildToolDefsInput struct {
@@ -197,6 +235,7 @@ type BuildToolDefsInput struct {
 type BuildToolDefsResult struct {
 	ToolDefs   []llm.ToolDef `json:"tool_defs"`
 	ToolRoutes []ToolRoute   `json:"tool_routes"`
+	HandoffTo  *ToolRoute    `json:"handoff_to,omitempty"`
 }
 
 func mergeOverrides(agentOverrides, serverOverrides json.RawMessage, serverName, toolName string) []ToolOverride {

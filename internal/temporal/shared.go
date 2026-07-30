@@ -68,8 +68,9 @@ type CallToolResult struct {
 type ToolKind string
 
 const (
-	ToolKindMCP   ToolKind = "mcp"
-	ToolKindAgent ToolKind = "agent"
+	ToolKindMCP     ToolKind = "mcp"
+	ToolKindAgent   ToolKind = "agent"
+	ToolKindHandoff ToolKind = "handoff"
 )
 
 type ToolOverride struct {

@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
 )
@@ -112,6 +113,8 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	if maxTurns == 0 {
 		maxTurns = 10
 	}
+	const maxHandoffs = 20
+	var handoffCount int
 
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
 
@@ -181,6 +184,45 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 		}
 		messages = append(messages, assistantMsg)
 
+		handoffCallIdx := -1
+		var handoffRoute ToolRoute
+		for i, tc := range assistantMsg.ToolCalls {
+			if r, ok := routeByLLMName[tc.Function.Name]; ok && r.Kind == ToolKindHandoff {
+				if handoffCallIdx == -1 {
+					handoffCallIdx = i
+					handoffRoute = r
+				} else {
+					logger.Warn("multiple handoff tool calls in one message, using the first", "agent", def.Name)
+				}
+			}
+		}
+		if handoffCallIdx >= 0 {
+			tc := assistantMsg.ToolCalls[handoffCallIdx]
+			var handoffMsg string
+			var msgInput struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &msgInput); err == nil {
+				handoffMsg = msgInput.Message
+			}
+			if handoffMsg == "" {
+				handoffMsg = "Handed off to " + handoffRoute.AgentName
+			}
+			messages = append(messages, llm.Message{
+				Role:       "tool",
+				Content:    handoffMsg,
+				ToolCallID: tc.ID,
+			})
+			if handoffCount >= maxHandoffs {
+				return RunAgentResult{}, fmt.Errorf("handoff chain exceeded limit of %d", maxHandoffs)
+			}
+			if err := switchAgent(ctx, actCtx, &def, &messages, &routeByLLMName, &toolDefsResult, &so, &params, &maxTurns, &handoffCount, handoffRoute.AgentID); err != nil {
+				return RunAgentResult{}, err
+			}
+			turn = -1
+			continue
+		}
+
 		if len(assistantMsg.ToolCalls) == 0 {
 			content, _ := assistantMsg.Content.(string)
 			if so != nil || def.ForceJSON {
@@ -243,6 +285,20 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 				}).Get(ctx, nil)
 			}
 		}
+
+			if def.HandoffTo != "" {
+				if toolDefsResult.HandoffTo == nil {
+					return RunAgentResult{}, fmt.Errorf("handoff_to %q failed: target not resolvable", def.HandoffTo)
+				}
+				if handoffCount >= maxHandoffs {
+					return RunAgentResult{}, fmt.Errorf("handoff chain exceeded limit of %d", maxHandoffs)
+				}
+				if err := switchAgent(ctx, actCtx, &def, &messages, &routeByLLMName, &toolDefsResult, &so, &params, &maxTurns, &handoffCount, toolDefsResult.HandoffTo.AgentID); err != nil {
+					return RunAgentResult{}, err
+				}
+				turn = -1
+				continue
+			}
 			return finalResult, nil
 		}
 
@@ -484,4 +540,109 @@ func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messag
 		}
 	}
 	return output.Episodes, nil
+}
+
+func switchAgent(
+	ctx workflow.Context,
+	actCtx workflow.Context,
+	def **config.Definition,
+	messages *[]llm.Message,
+	routeByLLMName *map[string]ToolRoute,
+	toolDefsResult *BuildToolDefsResult,
+	so **config.StructuredOutput,
+	params *RunAgentParams,
+	maxTurns *int,
+	handoffCount *int,
+	targetAgentID string,
+) error {
+	logger := workflow.GetLogger(ctx)
+
+	var resolveResult ResolveAgentResult
+	if err := workflow.ExecuteActivity(actCtx, (*Activities).ResolveAgentActivity, ResolveAgentInput{
+		AgentID: targetAgentID,
+	}).Get(ctx, &resolveResult); err != nil {
+		return fmt.Errorf("handoff: resolve target agent %s: %w", targetAgentID, err)
+	}
+	newDef := resolveResult.Definition
+
+	if newDef.AgentID == (*def).AgentID {
+		return fmt.Errorf("handoff: target agent %s is the same as current agent", newDef.Name)
+	}
+
+	var newToolDefs BuildToolDefsResult
+	if err := workflow.ExecuteActivity(actCtx, (*Activities).BuildToolDefsActivity, BuildToolDefsInput{
+		Definition: newDef,
+	}).Get(ctx, &newToolDefs); err != nil {
+		return fmt.Errorf("handoff: build tool defs for %s: %w", newDef.Name, err)
+	}
+
+	newRouteByLLMName := make(map[string]ToolRoute, len(newToolDefs.ToolRoutes))
+	for _, r := range newToolDefs.ToolRoutes {
+		newRouteByLLMName[r.LLMName] = r
+	}
+
+	supportsSchema := params.LLMConfig != nil && params.LLMConfig.SchemaValidation
+
+	systemPrompt := newDef.SystemPrompt
+	if newDef.MemoryEnabled && newDef.MemorySearchAgentID != "" {
+		memParams := RunAgentParams{
+			AgentID:             newDef.AgentID,
+			AgentName:           newDef.Name,
+			Message:             params.Message,
+			History:             params.History,
+			MemorySearchAgentID: newDef.MemorySearchAgentID,
+		}
+		queries, err := invokeMemorySearchAgent(ctx, memParams, newDef.Name)
+		if err != nil {
+			logger.Warn("handoff: memory search agent failed", "error", err)
+		} else if len(queries) > 0 {
+			var memResult SearchMemoryResult
+			err = workflow.ExecuteActivity(actCtx, (*Activities).SearchMemoryActivity, SearchMemoryInput{
+				GroupID: newDef.AgentID,
+				Queries: queries,
+			}).Get(ctx, &memResult)
+			if err != nil {
+				logger.Warn("handoff: memory search failed", "agent", newDef.Name, "error", err)
+			} else if len(memResult.Facts) > 0 {
+				var factLines string
+				for _, f := range memResult.Facts {
+					factLines += "\n- " + f
+				}
+				systemPrompt += fmt.Sprintf("\n\n[Relevant context from past interactions]\n%s", factLines)
+			}
+		}
+	}
+
+	newSO := newDef.StructuredOutput
+	if newSO != nil && !supportsSchema {
+		systemPrompt += fmt.Sprintf(
+			"\n\nYou must respond with ONLY valid JSON matching this schema:\n%s",
+			string(newSO.Schema),
+		)
+	}
+
+	if len(*messages) > 0 {
+		(*messages)[0] = llm.Message{Role: "system", Content: systemPrompt}
+	} else {
+		*messages = append([]llm.Message{{Role: "system", Content: systemPrompt}}, *messages...)
+	}
+
+	*def = newDef
+	*routeByLLMName = newRouteByLLMName
+	*toolDefsResult = newToolDefs
+	*so = newSO
+	params.AgentID = newDef.AgentID
+	params.AgentName = newDef.Name
+	params.MemoryEnabled = newDef.MemoryEnabled
+	params.MemorySearchAgentID = newDef.MemorySearchAgentID
+	params.MemoryIngestAgentID = newDef.MemoryIngestAgentID
+	newMax := newDef.MaxTurns
+	if newMax == 0 {
+		newMax = 10
+	}
+	*maxTurns = newMax
+	*handoffCount++
+
+	logger.Info("handed off to agent", "agent", newDef.Name, "agent_id", newDef.AgentID, "handoff_count", *handoffCount)
+	return nil
 }
