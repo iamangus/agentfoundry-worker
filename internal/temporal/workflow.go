@@ -10,7 +10,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
 )
@@ -107,15 +106,14 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	messages := make([]llm.Message, 0, 2+len(params.History))
 	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 	messages = append(messages, params.History...)
-	messages = append(messages, llm.Message{Role: "user", Content: params.Message})
+	if params.Message != "" {
+		messages = append(messages, llm.Message{Role: "user", Content: params.Message})
+	}
 
 	maxTurns := def.MaxTurns
 	if maxTurns == 0 {
 		maxTurns = 10
 	}
-	const maxHandoffs = 20
-	var handoffCount int
-
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
 
 	// 5. Multi-turn loop.
@@ -213,14 +211,11 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 				Content:    handoffMsg,
 				ToolCallID: tc.ID,
 			})
-			if handoffCount >= maxHandoffs {
-				return RunAgentResult{}, fmt.Errorf("handoff chain exceeded limit of %d", maxHandoffs)
-			}
-			if err := switchAgent(ctx, actCtx, &def, &messages, &routeByLLMName, &toolDefsResult, &so, &params, &maxTurns, &handoffCount, handoffRoute.AgentID); err != nil {
+			childResult, err := handoffToChild(ctx, actCtx, &messages, &params, handoffRoute.AgentID)
+			if err != nil {
 				return RunAgentResult{}, err
 			}
-			turn = -1
-			continue
+			return childResult, nil
 		}
 
 		if len(assistantMsg.ToolCalls) == 0 {
@@ -290,14 +285,11 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 				if toolDefsResult.HandoffTo == nil {
 					return RunAgentResult{}, fmt.Errorf("handoff_to %q failed: target not resolvable", def.HandoffTo)
 				}
-				if handoffCount >= maxHandoffs {
-					return RunAgentResult{}, fmt.Errorf("handoff chain exceeded limit of %d", maxHandoffs)
-				}
-				if err := switchAgent(ctx, actCtx, &def, &messages, &routeByLLMName, &toolDefsResult, &so, &params, &maxTurns, &handoffCount, toolDefsResult.HandoffTo.AgentID); err != nil {
+				childResult, err := handoffToChild(ctx, actCtx, &messages, &params, toolDefsResult.HandoffTo.AgentID)
+				if err != nil {
 					return RunAgentResult{}, err
 				}
-				turn = -1
-				continue
+				return childResult, nil
 			}
 			return finalResult, nil
 		}
@@ -542,113 +534,53 @@ func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messag
 	return output.Episodes, nil
 }
 
-func switchAgent(
+func handoffToChild(
 	ctx workflow.Context,
 	actCtx workflow.Context,
-	def **config.Definition,
 	messages *[]llm.Message,
-	routeByLLMName *map[string]ToolRoute,
-	toolDefsResult *BuildToolDefsResult,
-	so **config.StructuredOutput,
 	params *RunAgentParams,
-	maxTurns *int,
-	handoffCount *int,
 	targetAgentID string,
-) error {
-	logger := workflow.GetLogger(ctx)
+) (RunAgentResult, error) {
+	const maxHandoffs = 20
+	if params.HandoffCount >= maxHandoffs {
+		return RunAgentResult{}, fmt.Errorf("handoff chain exceeded limit of %d", maxHandoffs)
+	}
 
 	var resolveResult ResolveAgentResult
 	if err := workflow.ExecuteActivity(actCtx, (*Activities).ResolveAgentActivity, ResolveAgentInput{
 		AgentID: targetAgentID,
 	}).Get(ctx, &resolveResult); err != nil {
-		return fmt.Errorf("handoff: resolve target agent %s: %w", targetAgentID, err)
+		return RunAgentResult{}, fmt.Errorf("handoff: resolve target agent: %w", err)
 	}
 	newDef := resolveResult.Definition
 
-	if newDef.AgentID == (*def).AgentID {
-		return fmt.Errorf("handoff: target agent %s is the same as current agent", newDef.Name)
+	logger := workflow.GetLogger(ctx)
+	logger.Info("starting handoff child workflow", "agent", newDef.Name, "agent_id", newDef.AgentID, "handoff_count", params.HandoffCount+1)
+
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		TaskQueue: TaskQueue,
+		SearchAttributes: map[string]interface{}{
+			"AgentName": newDef.Name,
+			"RunType":   "direct",
+		},
+	})
+
+	var childResult RunAgentResult
+	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
+		AgentID:             newDef.AgentID,
+		AgentName:           newDef.Name,
+		Message:             "",
+		History:             (*messages)[1:],
+		StreamID:            params.StreamID,
+		LLMConfig:           params.LLMConfig,
+		MemoryEnabled:       newDef.MemoryEnabled,
+		MemorySearchAgentID: newDef.MemorySearchAgentID,
+		MemoryIngestAgentID: newDef.MemoryIngestAgentID,
+		UserSubject:         params.UserSubject,
+		HandoffCount:        params.HandoffCount + 1,
+	}).Get(ctx, &childResult)
+	if err != nil {
+		return RunAgentResult{}, fmt.Errorf("handoff to %s: %w", newDef.Name, err)
 	}
-
-	var newToolDefs BuildToolDefsResult
-	if err := workflow.ExecuteActivity(actCtx, (*Activities).BuildToolDefsActivity, BuildToolDefsInput{
-		Definition: newDef,
-	}).Get(ctx, &newToolDefs); err != nil {
-		return fmt.Errorf("handoff: build tool defs for %s: %w", newDef.Name, err)
-	}
-
-	newRouteByLLMName := make(map[string]ToolRoute, len(newToolDefs.ToolRoutes))
-	for _, r := range newToolDefs.ToolRoutes {
-		newRouteByLLMName[r.LLMName] = r
-	}
-
-	supportsSchema := params.LLMConfig != nil && params.LLMConfig.SchemaValidation
-
-	systemPrompt := newDef.SystemPrompt
-	if newDef.MemoryEnabled && newDef.MemorySearchAgentID != "" {
-		memParams := RunAgentParams{
-			AgentID:             newDef.AgentID,
-			AgentName:           newDef.Name,
-			Message:             params.Message,
-			History:             params.History,
-			MemorySearchAgentID: newDef.MemorySearchAgentID,
-		}
-		queries, err := invokeMemorySearchAgent(ctx, memParams, newDef.Name)
-		if err != nil {
-			logger.Warn("handoff: memory search agent failed", "error", err)
-		} else if len(queries) > 0 {
-			var memResult SearchMemoryResult
-			err = workflow.ExecuteActivity(actCtx, (*Activities).SearchMemoryActivity, SearchMemoryInput{
-				GroupID: newDef.AgentID,
-				Queries: queries,
-			}).Get(ctx, &memResult)
-			if err != nil {
-				logger.Warn("handoff: memory search failed", "agent", newDef.Name, "error", err)
-			} else if len(memResult.Facts) > 0 {
-				var factLines string
-				for _, f := range memResult.Facts {
-					factLines += "\n- " + f
-				}
-				systemPrompt += fmt.Sprintf("\n\n[Relevant context from past interactions]\n%s", factLines)
-			}
-		}
-	}
-
-	newSO := newDef.StructuredOutput
-	if newSO != nil && !supportsSchema {
-		systemPrompt += fmt.Sprintf(
-			"\n\nYou must respond with ONLY valid JSON matching this schema:\n%s",
-			string(newSO.Schema),
-		)
-	}
-
-	if len(*messages) > 0 {
-		(*messages)[0] = llm.Message{Role: "system", Content: systemPrompt}
-	} else {
-		*messages = append([]llm.Message{{Role: "system", Content: systemPrompt}}, *messages...)
-	}
-
-	*def = newDef
-	*routeByLLMName = newRouteByLLMName
-	*toolDefsResult = newToolDefs
-	*so = newSO
-	params.AgentID = newDef.AgentID
-	params.AgentName = newDef.Name
-	params.MemoryEnabled = newDef.MemoryEnabled
-	params.MemorySearchAgentID = newDef.MemorySearchAgentID
-	params.MemoryIngestAgentID = newDef.MemoryIngestAgentID
-	newMax := newDef.MaxTurns
-	if newMax == 0 {
-		newMax = 10
-	}
-	*maxTurns = newMax
-	*handoffCount++
-
-	if err := workflow.UpsertSearchAttributes(ctx, map[string]interface{}{
-		"AgentName": newDef.Name,
-	}); err != nil {
-		logger.Warn("failed to update search attributes on handoff", "agent", newDef.Name, "error", err)
-	}
-
-	logger.Info("handed off to agent", "agent", newDef.Name, "agent_id", newDef.AgentID, "handoff_count", *handoffCount)
-	return nil
+	return childResult, nil
 }
