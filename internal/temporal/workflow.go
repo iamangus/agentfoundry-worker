@@ -643,6 +643,12 @@ func switchAgent(
 	*maxTurns = newMax
 	*handoffCount++
 
+	if err := workflow.UpsertSearchAttributes(ctx, map[string]interface{}{
+		"AgentName": newDef.Name,
+	}); err != nil {
+		logger.Warn("failed to update search attributes on handoff", "agent", newDef.Name, "error", err)
+	}
+
 	logger.Info("handed off to agent", "agent", newDef.Name, "agent_id", newDef.AgentID, "handoff_count", *handoffCount)
 	return nil
 }
