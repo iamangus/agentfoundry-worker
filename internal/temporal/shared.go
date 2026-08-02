@@ -4,6 +4,7 @@ import (
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
+	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
 
 const (
@@ -62,8 +63,9 @@ type CallToolInput struct {
 }
 
 type CallToolResult struct {
-	Content string `json:"content"`
-	IsError bool   `json:"is_error"`
+	Content       string                      `json:"content"`
+	ContentBlocks []orchestrator.ContentBlock `json:"content_blocks,omitempty"`
+	IsError       bool                        `json:"is_error"`
 }
 
 type ToolKind string

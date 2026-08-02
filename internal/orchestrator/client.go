@@ -38,9 +38,23 @@ type mcpCallRequest struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
+type ContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
 type mcpCallResponse struct {
-	Content string `json:"content"`
-	IsError bool   `json:"is_error"`
+	Content       string         `json:"content"`
+	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"`
+	IsError       bool           `json:"is_error"`
+}
+
+type CallToolResult struct {
+	Content       string
+	ContentBlocks []ContentBlock
+	IsError       bool
 }
 
 func NewClient(cfg Config) *Client {
@@ -80,7 +94,7 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	return tools, nil
 }
 
-func (c *Client) CallTool(ctx context.Context, server, tool string, arguments map[string]any) (string, bool, error) {
+func (c *Client) CallTool(ctx context.Context, server, tool string, arguments map[string]any) (*CallToolResult, error) {
 	body := mcpCallRequest{
 		Server:    server,
 		Tool:      tool,
@@ -88,9 +102,9 @@ func (c *Client) CallTool(ctx context.Context, server, tool string, arguments ma
 	}
 	var resp mcpCallResponse
 	if err := c.post(ctx, "/api/internal/mcp/call", body, &resp); err != nil {
-		return "", false, fmt.Errorf("call tool %s.%s: %w", server, tool, err)
+		return nil, fmt.Errorf("call tool %s.%s: %w", server, tool, err)
 	}
-	return resp.Content, resp.IsError, nil
+	return &CallToolResult{Content: resp.Content, ContentBlocks: resp.ContentBlocks, IsError: resp.IsError}, nil
 }
 
 func (c *Client) publishShort(ctx context.Context, path string, body any) error {

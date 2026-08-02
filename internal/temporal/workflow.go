@@ -12,6 +12,7 @@ import (
 
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
+	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
 
 var defaultActivityOptions = workflow.ActivityOptions{
@@ -296,7 +297,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 
 		type toolCallOutcome struct {
 			toolCallID string
-			content    string
+			content    any
 		}
 
 		outcomes := make([]toolCallOutcome, len(assistantMsg.ToolCalls))
@@ -347,7 +348,7 @@ func dispatchToolCall(
 	tc llm.ToolCall,
 	routeByLLMName map[string]ToolRoute,
 	params RunAgentParams,
-) (string, error) {
+) (any, error) {
 	logger := workflow.GetLogger(ctx)
 
 	route, ok := routeByLLMName[tc.Function.Name]
@@ -413,11 +414,36 @@ func dispatchToolCall(
 		if result.IsError {
 			return "", fmt.Errorf("tool returned error: %s", result.Content)
 		}
-		return result.Content, nil
+		return buildToolMessageContent(result.Content, result.ContentBlocks), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool kind %q for tool %s", route.Kind, tc.Function.Name)
 	}
+}
+
+func buildToolMessageContent(content string, blocks []orchestrator.ContentBlock) any {
+	if len(blocks) == 0 {
+		return content
+	}
+	parts := make([]any, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "image":
+			mime := b.MIMEType
+			if mime == "" {
+				mime = "image/png"
+			}
+			parts = append(parts, map[string]any{
+				"type": "image_url",
+				"image_url": map[string]string{
+					"url": "data:" + mime + ";base64," + b.Data,
+				},
+			})
+		default:
+			parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+		}
+	}
+	return parts
 }
 
 func resolveOverrideValue(value string, params RunAgentParams) string {

@@ -48,13 +48,13 @@ func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) 
 		}
 	}
 
-	content, isError, err := a.orchClient.CallTool(ctx, input.ServerName, input.ToolName, input.Arguments)
+	result, err := a.orchClient.CallTool(ctx, input.ServerName, input.ToolName, input.Arguments)
 	if err != nil {
 		return CallToolResult{}, fmt.Errorf("call tool %s.%s: %w", input.ServerName, input.ToolName, err)
 	}
 
-	logger.Info("MCP tool completed", "server", input.ServerName, "tool", input.ToolName, "result_len", len(content))
-	return CallToolResult{Content: content, IsError: isError}, nil
+	logger.Info("MCP tool completed", "server", input.ServerName, "tool", input.ToolName, "result_len", len(result.Content))
+	return CallToolResult{Content: result.Content, ContentBlocks: result.ContentBlocks, IsError: result.IsError}, nil
 }
 
 func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (LLMChatResult, error) {
