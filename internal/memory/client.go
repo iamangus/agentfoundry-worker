@@ -92,13 +92,16 @@ func (c *Client) do(req *http.Request, result any) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// Graphiti's ingest endpoint (/messages) returns 202 Accepted when messages
+	// are queued for async processing. Search returns 200. Accept any 2xx as
+	// success and only decode the body into a typed result on 200.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errBody bytes.Buffer
 		errBody.ReadFrom(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, errBody.String())
 	}
 
-	if result != nil {
+	if result != nil && resp.StatusCode == http.StatusOK {
 		return json.NewDecoder(resp.Body).Decode(result)
 	}
 	return nil

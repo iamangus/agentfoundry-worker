@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.temporal.io/sdk/activity"
 
@@ -53,8 +54,10 @@ func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) 
 		return CallToolResult{}, fmt.Errorf("call tool %s.%s: %w", input.ServerName, input.ToolName, err)
 	}
 
+	blocks := orchestrator.CompressContentBlocks(result.ContentBlocks)
+
 	logger.Info("MCP tool completed", "server", input.ServerName, "tool", input.ToolName, "result_len", len(result.Content))
-	return CallToolResult{Content: result.Content, ContentBlocks: result.ContentBlocks, IsError: result.IsError}, nil
+	return CallToolResult{Content: result.Content, ContentBlocks: blocks, IsError: result.IsError}, nil
 }
 
 func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (LLMChatResult, error) {
@@ -126,6 +129,27 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 	toolByQualifiedName := make(map[string]orchestrator.ToolInfo, len(tools))
 	for _, t := range tools {
 		toolByQualifiedName[t.QualifiedName] = t
+	}
+
+	// If any referenced MCP tool isn't present yet (e.g. the MCP server was
+	// restarting when we listed tools), wait briefly and re-list before giving
+	// up. Otherwise those tools silently disappear from this run's tool set.
+	missing := missingMCPTools(input.Definition.Tools, toolByQualifiedName)
+	for attempt := 1; len(missing) > 0 && attempt <= 3; attempt++ {
+		logger.Warn("referenced MCP tools not yet discovered, retrying", "agent", input.Definition.Name, "missing", missing, "attempt", attempt)
+		if err := sleepCtx(ctx, time.Duration(attempt)*2*time.Second); err != nil {
+			break
+		}
+		tools, err := a.orchClient.ListTools(ctx)
+		if err != nil {
+			logger.Warn("re-list tools from orchestrator failed", "error", err)
+			continue
+		}
+		toolByQualifiedName = make(map[string]orchestrator.ToolInfo, len(tools))
+		for _, t := range tools {
+			toolByQualifiedName[t.QualifiedName] = t
+		}
+		missing = missingMCPTools(input.Definition.Tools, toolByQualifiedName)
 	}
 
 	var toolDefs []llm.ToolDef
@@ -313,6 +337,32 @@ func parseToolRef(ref string) (serverName, toolName string, ok bool) {
 		return "", "", false
 	}
 	return ref[:idx], ref[idx+1:], true
+}
+
+// missingMCPTools returns the agent's tool refs that look like MCP tools
+// ("server.tool") but aren't present in the discovered tool map.
+func missingMCPTools(refs []string, toolByQualifiedName map[string]orchestrator.ToolInfo) []string {
+	var missing []string
+	for _, ref := range refs {
+		if _, _, isMCP := parseToolRef(ref); isMCP {
+			if _, found := toolByQualifiedName[ref]; !found {
+				missing = append(missing, ref)
+			}
+		}
+	}
+	return missing
+}
+
+// sleepCtx sleeps for d, aborting early if ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (a *Activities) SearchMemoryActivity(ctx context.Context, input SearchMemoryInput) (SearchMemoryResult, error) {
