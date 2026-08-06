@@ -64,15 +64,32 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	logger := activity.GetLogger(ctx)
 	logger.Info("sending LLM chat request", "model", input.Request.Model, "messages", len(input.Request.Messages), "stream_id", input.StreamID)
 
+	heartbeatStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				activity.RecordHeartbeat(ctx)
+			case <-ctx.Done():
+				return
+			case <-heartbeatStop:
+				return
+			}
+		}
+	}()
+	defer close(heartbeatStop)
+
 	llmClient := a.llmClientForInput(input)
 
 	var resp *llm.ChatResponse
 	var err error
 
 	if input.StreamID != "" {
-		if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "status", "Thinking"); perr != nil {
-			logger.Warn("failed to publish status", "stream_id", input.StreamID, "error", perr)
-		}
+		pub := orchestrator.NewAsyncPublisher(ctx, a.orchClient, input.StreamID)
+		defer pub.Close()
+		pub.PublishEvent("status", "Thinking")
 		var responseStarted bool
 		resp, err = llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
 			for _, choice := range chunk.Choices {
@@ -85,13 +102,9 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 				}
 				if !responseStarted {
 					responseStarted = true
-					if perr := a.orchClient.PublishEvent(ctx, input.StreamID, "response_start", ""); perr != nil {
-						logger.Warn("failed to publish response_start", "stream_id", input.StreamID, "error", perr)
-					}
+					pub.PublishEvent("response_start", "")
 				}
-				if perr := a.orchClient.PublishToken(ctx, input.StreamID, token); perr != nil {
-					logger.Warn("failed to publish stream token", "stream_id", input.StreamID, "error", perr)
-				}
+				pub.PublishToken(token)
 			}
 		})
 	} else {

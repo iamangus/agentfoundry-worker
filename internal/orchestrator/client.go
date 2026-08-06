@@ -18,9 +18,10 @@ type Config struct {
 }
 
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	baseURL     string
+	apiKey      string
+	httpClient  *http.Client
+	shortClient *http.Client
 }
 
 type ToolInfo struct {
@@ -63,6 +64,9 @@ func NewClient(cfg Config) *Client {
 		apiKey:  cfg.APIKey,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
+		},
+		shortClient: &http.Client{
+			Timeout: 5 * time.Second,
 		},
 	}
 }
@@ -108,7 +112,6 @@ func (c *Client) CallTool(ctx context.Context, server, tool string, arguments ma
 }
 
 func (c *Client) publishShort(ctx context.Context, path string, body any) error {
-	shortClient := &http.Client{Timeout: 5 * time.Second}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -119,7 +122,7 @@ func (c *Client) publishShort(ctx context.Context, path string, body any) error 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
-	resp, err := shortClient.Do(req)
+	resp, err := c.shortClient.Do(req)
 	if err != nil {
 		return err
 	}

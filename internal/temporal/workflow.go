@@ -24,6 +24,7 @@ var defaultActivityOptions = workflow.ActivityOptions{
 
 var llmActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 5 * time.Minute,
+	HeartbeatTimeout:    1 * time.Minute,
 	RetryPolicy: &temporal.RetryPolicy{
 		MaximumAttempts:        10,
 		InitialInterval:        time.Second,
