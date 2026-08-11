@@ -29,7 +29,11 @@ func NewAsyncPublisher(ctx context.Context, c *Client, streamID string) *AsyncPu
 		done:     make(chan struct{}),
 	}
 	go func() {
-		defer close(p.done)
+		// Do NOT close p.done here: Close() is the single closer (guarded by
+		// sync.Once). If this goroutine also closed it on exit, a Close() that
+		// fired while the goroutine was mid-publish (publishShort can take up
+		// to 5s) would race this deferred close and panic with "close of
+		// closed channel", crashing the entire worker process.
 		for {
 			select {
 			case req := <-p.ch:
