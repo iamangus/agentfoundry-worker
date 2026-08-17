@@ -168,6 +168,37 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 	var toolDefs []llm.ToolDef
 	var toolRoutes []ToolRoute
 
+	added := make(map[string]bool)
+	addMCPTool := func(serverName, toolName string, ti orchestrator.ToolInfo) {
+		ref := serverName + "." + toolName
+		if added[ref] {
+			return
+		}
+		added[ref] = true
+		llmName := serverName + "__" + toolName
+		var params json.RawMessage
+		if ti.InputSchema != nil {
+			params = ti.InputSchema
+		} else {
+			params = json.RawMessage(`{"type":"object"}`)
+		}
+		toolDefs = append(toolDefs, llm.ToolDef{
+			Type: "function",
+			Function: llm.FunctionDef{
+				Name:        llmName,
+				Description: ti.Description,
+				Parameters:  params,
+			},
+		})
+		toolRoutes = append(toolRoutes, ToolRoute{
+			LLMName:    llmName,
+			ServerName: serverName,
+			ToolName:   toolName,
+			Kind:       ToolKindMCP,
+			Overrides:  mergeOverrides(input.Definition.ToolOverrides, ti.ToolOverrides, serverName, toolName),
+		})
+	}
+
 	for _, ref := range input.Definition.Tools {
 		serverName, toolName, isMCP := parseToolRef(ref)
 		if isMCP {
@@ -176,29 +207,8 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 				logger.Warn("agent references unknown MCP tool, skipping", "agent", input.Definition.Name, "ref", ref)
 				continue
 			}
-			llmName := serverName + "__" + toolName
-			var params json.RawMessage
-			if ti.InputSchema != nil {
-				params = ti.InputSchema
-			} else {
-				params = json.RawMessage(`{"type":"object"}`)
-			}
-			toolDefs = append(toolDefs, llm.ToolDef{
-				Type: "function",
-				Function: llm.FunctionDef{
-					Name:        llmName,
-					Description: ti.Description,
-					Parameters:  params,
-				},
-			})
-		toolRoutes = append(toolRoutes, ToolRoute{
-			LLMName:    llmName,
-			ServerName: serverName,
-			ToolName:   toolName,
-			Kind:       ToolKindMCP,
-			Overrides:  mergeOverrides(input.Definition.ToolOverrides, ti.ToolOverrides, serverName, toolName),
-		})
-		continue
+			addMCPTool(serverName, toolName, ti)
+			continue
 		}
 
 		agentDef, err := a.orchClient.GetAgent(ctx, ref)
@@ -221,6 +231,21 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 			AgentName: agentDef.Name,
 			Kind:      ToolKindAgent,
 		})
+	}
+
+	// Ephemeral MCP servers attached to this run expose all of their tools to
+	// the agent automatically, independent of the agent's Definition.Tools.
+	if len(input.EphemeralServers) > 0 {
+		ephemeral := make(map[string]bool, len(input.EphemeralServers))
+		for _, name := range input.EphemeralServers {
+			ephemeral[name] = true
+		}
+		for _, t := range tools {
+			if !ephemeral[t.Server] {
+				continue
+			}
+			addMCPTool(t.Server, t.Name, t)
+		}
 	}
 
 	for _, targetName := range input.Definition.Handoffs {
@@ -267,6 +292,9 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 
 type BuildToolDefsInput struct {
 	Definition *config.Definition `json:"definition"`
+	// EphemeralServers are MCP servers attached to this run whose tools should
+	// be presented to the agent automatically, regardless of Definition.Tools.
+	EphemeralServers []string `json:"ephemeral_servers,omitempty"`
 }
 
 type BuildToolDefsResult struct {

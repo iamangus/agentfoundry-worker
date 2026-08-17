@@ -50,10 +50,18 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	}
 	def := resolveResult.Definition
 
-	// 2. Build the tool set (LLM tool definitions + routing table).
+	// 2. Build the tool set (LLM tool definitions + routing table). Ephemeral
+	// MCP servers attached to the run expose all their tools automatically.
+	var ephemeralServers []string
+	for _, srv := range params.MCPServers {
+		if srv.Name != "" {
+			ephemeralServers = append(ephemeralServers, srv.Name)
+		}
+	}
 	var toolDefsResult BuildToolDefsResult
 	err = workflow.ExecuteActivity(actCtx, (*Activities).BuildToolDefsActivity, BuildToolDefsInput{
-		Definition: def,
+		Definition:       def,
+		EphemeralServers: ephemeralServers,
 	}).Get(ctx, &toolDefsResult)
 	if err != nil {
 		return RunAgentResult{}, fmt.Errorf("build tool defs: %w", err)

@@ -21,6 +21,7 @@ type RunAgentParams struct {
 	AgentName      string                   `json:"agent_name"`
 	Message        string                   `json:"message"`
 	History        []llm.Message            `json:"history,omitempty"`
+	MCPServers     []MCPServerRef           `json:"mcp_servers,omitempty"`
 	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
 	StreamID       string                   `json:"stream_id,omitempty"`
 	LLMConfig      *LLMConfigInput          `json:"llm_config,omitempty"`
@@ -29,6 +30,13 @@ type RunAgentParams struct {
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
 	UserSubject         string                   `json:"user_subject,omitempty"`
 	HandoffCount        int                      `json:"handoff_count,omitempty"`
+}
+
+// MCPServerRef is the subset of an ephemeral MCP server config the workflow
+// needs. The orchestrator has already connected and registered the server;
+// the worker only needs its name to auto-present its tools to the agent.
+type MCPServerRef struct {
+	Name string `json:"name"`
 }
 
 type RunAgentResult struct {
