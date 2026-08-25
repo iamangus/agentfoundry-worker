@@ -76,6 +76,16 @@ type CallToolResult struct {
 	IsError       bool                        `json:"is_error"`
 }
 
+type PreInferenceInput struct {
+	Processor config.PreInferenceProcessor `json:"processor"`
+}
+
+// PreInferenceResult is the text-only context a processor contributes to the
+// initial system prompt.
+type PreInferenceResult struct {
+	Text string `json:"text"`
+}
+
 type ToolKind string
 
 const (

@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/angoo/agentfoundry-worker/internal/memory"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
@@ -50,6 +51,11 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	}
 	def := resolveResult.Definition
 
+	preInferenceContext, err := runStartPreInferenceProcessors(ctx, def)
+	if err != nil {
+		return RunAgentResult{}, err
+	}
+
 	// 2. Build the tool set (LLM tool definitions + routing table). Ephemeral
 	// MCP servers attached to the run expose all their tools automatically.
 	var ephemeralServers []string
@@ -82,6 +88,9 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 
 	// 4. Build initial messages: system prompt + history + user message.
 	systemPrompt := def.SystemPrompt
+	if preInferenceContext != "" {
+		systemPrompt += preInferenceContext
+	}
 
 	// 4a. Memory search: invoke memory search agent for queries, then search Graphiti.
 	if params.MemoryEnabled && params.MemorySearchAgentID != "" {
@@ -279,17 +288,17 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 				History:  messages[1:],
 			}
 
-		if params.MemoryEnabled && params.MemoryIngestAgentID != "" {
-			episodes, err := invokeMemoryIngestAgent(ctx, params, messages, def.Name)
-			if err != nil {
-				logger.Warn("memory ingest agent failed", "error", err)
-			} else if len(episodes) > 0 {
-				_ = workflow.ExecuteActivity(actCtx, (*Activities).IngestEpisodeActivity, IngestEpisodeInput{
-					GroupID:  def.AgentID,
-					Episodes: episodes,
-				}).Get(ctx, nil)
+			if params.MemoryEnabled && params.MemoryIngestAgentID != "" {
+				episodes, err := invokeMemoryIngestAgent(ctx, params, messages, def.Name)
+				if err != nil {
+					logger.Warn("memory ingest agent failed", "error", err)
+				} else if len(episodes) > 0 {
+					_ = workflow.ExecuteActivity(actCtx, (*Activities).IngestEpisodeActivity, IngestEpisodeInput{
+						GroupID:  def.AgentID,
+						Episodes: episodes,
+					}).Get(ctx, nil)
+				}
 			}
-		}
 
 			if def.HandoffTo != "" {
 				if toolDefsResult.HandoffTo == nil {
@@ -352,6 +361,56 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	return RunAgentResult{}, fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
 }
 
+func runStartPreInferenceProcessors(ctx workflow.Context, def *config.Definition) (string, error) {
+	var context string
+	for _, processor := range def.PreInferenceProcessors {
+		if processor.Phase == "" {
+			processor.Phase = "run_start"
+		}
+		if processor.Phase != "run_start" {
+			if err := handlePreInferenceError(ctx, processor, fmt.Errorf("unsupported pre-inference phase %q", processor.Phase)); err != nil {
+				return "", err
+			}
+			continue
+		}
+
+		options := defaultActivityOptions
+		if processor.Timeout > 0 {
+			options.StartToCloseTimeout = time.Duration(processor.Timeout) * time.Second
+		}
+		actCtx := workflow.WithActivityOptions(ctx, options)
+		var result PreInferenceResult
+		err := workflow.ExecuteActivity(actCtx, (*Activities).PreInferenceActivity, PreInferenceInput{Processor: processor}).Get(ctx, &result)
+		if err != nil {
+			if policyErr := handlePreInferenceError(ctx, processor, err); policyErr != nil {
+				return "", policyErr
+			}
+			continue
+		}
+		if result.Text != "" {
+			id := processor.ID
+			if id == "" {
+				id = processor.Processor
+			}
+			context += fmt.Sprintf("\n\n[Pre-inference context: %s]\n%s\n[End pre-inference context]", id, result.Text)
+		}
+	}
+	return context, nil
+}
+
+func handlePreInferenceError(ctx workflow.Context, processor config.PreInferenceProcessor, err error) error {
+	logger := workflow.GetLogger(ctx)
+	switch processor.OnError {
+	case "fail":
+		return fmt.Errorf("pre-inference processor %q failed: %w", processor.ID, err)
+	case "skip":
+		logger.Info("skipping pre-inference processor", "id", processor.ID, "error", err)
+	default:
+		logger.Warn("pre-inference processor failed; continuing", "id", processor.ID, "error", err)
+	}
+	return nil
+}
+
 func dispatchToolCall(
 	ctx workflow.Context,
 	tc llm.ToolCall,
@@ -399,13 +458,13 @@ func dispatchToolCall(
 			return "", fmt.Errorf("parse tool arguments: %w", err)
 		}
 
-	for _, o := range route.Overrides {
-		val := resolveOverrideValue(o.Value, params)
-		_, exists := args[o.Param]
-		if o.Force || !exists {
-			args[o.Param] = val
+		for _, o := range route.Overrides {
+			val := resolveOverrideValue(o.Value, params)
+			_, exists := args[o.Param]
+			if o.Force || !exists {
+				args[o.Param] = val
+			}
 		}
-	}
 
 		logger.Info("dispatching MCP tool", "server", route.ServerName, "tool", route.ToolName)
 
@@ -490,11 +549,11 @@ func invokeMemorySearchAgent(ctx workflow.Context, params RunAgentParams, agentN
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
-		AgentID:        params.MemorySearchAgentID,
-		AgentName:      childDisplayName,
-		Message:        task,
-		History:        params.History,
-		MemoryEnabled:  false,
+		AgentID:       params.MemorySearchAgentID,
+		AgentName:     childDisplayName,
+		Message:       task,
+		History:       params.History,
+		MemoryEnabled: false,
 	}).Get(ctx, &childResult)
 	if err != nil {
 		return nil, err
@@ -550,10 +609,10 @@ func invokeMemoryIngestAgent(ctx workflow.Context, params RunAgentParams, messag
 	})
 	var childResult RunAgentResult
 	err := workflow.ExecuteChildWorkflow(childCtx, RunAgentWorkflow, RunAgentParams{
-		AgentID:        params.MemoryIngestAgentID,
-		AgentName:      childDisplayName,
-		Message:        task,
-		MemoryEnabled:  false,
+		AgentID:       params.MemoryIngestAgentID,
+		AgentName:     childDisplayName,
+		Message:       task,
+		MemoryEnabled: false,
 	}).Get(ctx, &childResult)
 	if err != nil {
 		return nil, err

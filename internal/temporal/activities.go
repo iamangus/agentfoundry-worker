@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.temporal.io/sdk/activity"
 
@@ -16,15 +17,24 @@ import (
 )
 
 type Activities struct {
-	orchClient   *orchestrator.Client
-	memoryClient *memory.Client
+	orchClient             *orchestrator.Client
+	memoryClient           *memory.Client
+	preInferenceProcessors map[string]preInferenceProcessor
 }
 
+const maxPreInferenceTextBytes = 8 * 1024
+
+type preInferenceProcessor func(context.Context, config.PreInferenceProcessor) (PreInferenceResult, error)
+
 func NewActivities(orchClient *orchestrator.Client, memClient *memory.Client) *Activities {
-	return &Activities{
+	activities := &Activities{
 		orchClient:   orchClient,
 		memoryClient: memClient,
 	}
+	activities.preInferenceProcessors = map[string]preInferenceProcessor{
+		"mcp_tool": activities.runMCPToolPreInferenceProcessor,
+	}
+	return activities
 }
 
 func (a *Activities) ResolveAgentActivity(ctx context.Context, input ResolveAgentInput) (ResolveAgentResult, error) {
@@ -58,6 +68,52 @@ func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) 
 
 	logger.Info("MCP tool completed", "server", input.ServerName, "tool", input.ToolName, "result_len", len(result.Content))
 	return CallToolResult{Content: result.Content, ContentBlocks: blocks, IsError: result.IsError}, nil
+}
+
+func (a *Activities) PreInferenceActivity(ctx context.Context, input PreInferenceInput) (PreInferenceResult, error) {
+	processor := input.Processor
+	handler, ok := a.preInferenceProcessors[processor.Processor]
+	if !ok {
+		return PreInferenceResult{}, fmt.Errorf("unsupported pre-inference processor %q", processor.Processor)
+	}
+	return handler(ctx, processor)
+}
+
+func (a *Activities) runMCPToolPreInferenceProcessor(ctx context.Context, processor config.PreInferenceProcessor) (PreInferenceResult, error) {
+	var cfg struct {
+		Server    string         `json:"server"`
+		Tool      string         `json:"tool"`
+		Arguments map[string]any `json:"arguments,omitempty"`
+	}
+	if err := json.Unmarshal(processor.Config, &cfg); err != nil {
+		return PreInferenceResult{}, fmt.Errorf("parse mcp_tool config: %w", err)
+	}
+	if cfg.Server == "" || cfg.Tool == "" {
+		return PreInferenceResult{}, fmt.Errorf("mcp_tool config requires server and tool")
+	}
+
+	logger := activity.GetLogger(ctx)
+	logger.Info("running pre-inference MCP tool", "id", processor.ID, "server", cfg.Server, "tool", cfg.Tool)
+	result, err := a.orchClient.CallTool(ctx, cfg.Server, cfg.Tool, cfg.Arguments)
+	if err != nil {
+		return PreInferenceResult{}, fmt.Errorf("call pre-inference tool %s.%s: %w", cfg.Server, cfg.Tool, err)
+	}
+	if result.IsError {
+		return PreInferenceResult{}, fmt.Errorf("pre-inference tool %s.%s returned an error", cfg.Server, cfg.Tool)
+	}
+
+	return PreInferenceResult{Text: truncatePreInferenceText(result.Content)}, nil
+}
+
+func truncatePreInferenceText(text string) string {
+	if len(text) <= maxPreInferenceTextBytes {
+		return text
+	}
+	cut := maxPreInferenceTextBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (LLMChatResult, error) {

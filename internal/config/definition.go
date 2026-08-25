@@ -26,8 +26,53 @@ type Definition struct {
 	MemorySearchAgentID string          `yaml:"memory_search_agent_id,omitempty" json:"memory_search_agent_id,omitempty"`
 	MemoryIngestAgentID string          `yaml:"memory_ingest_agent_id,omitempty" json:"memory_ingest_agent_id,omitempty"`
 	ToolOverrides       json.RawMessage `yaml:"tool_overrides,omitempty" json:"tool_overrides,omitempty"`
+	PreInferenceProcessors []PreInferenceProcessor `yaml:"pre_inference_processors,omitempty" json:"pre_inference_processors,omitempty"`
 	HandoffTo           string          `yaml:"handoff_to,omitempty" json:"handoff_to,omitempty"`
 	Handoffs            []string        `yaml:"handoffs,omitempty" json:"handoffs,omitempty"`
+}
+
+// PreInferenceProcessor declares work that contributes context before an
+// agent's initial system message is constructed.
+type PreInferenceProcessor struct {
+	ID        string          `yaml:"id,omitempty" json:"id,omitempty"`
+	Processor string          `yaml:"processor" json:"processor"`
+	Phase     string          `yaml:"phase" json:"phase"`
+	Config    json.RawMessage `yaml:"config" json:"config"`
+	OnError   string          `yaml:"on_error,omitempty" json:"on_error,omitempty"`
+	Timeout   int             `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+}
+
+// UnmarshalYAML converts a nested processor config to the JSON payload used by
+// the worker and orchestrator APIs.
+func (p *PreInferenceProcessor) UnmarshalYAML(value *yaml.Node) error {
+	type plain struct {
+		ID        string `yaml:"id"`
+		Processor string `yaml:"processor"`
+		Phase     string `yaml:"phase"`
+		OnError   string `yaml:"on_error"`
+		Timeout   int    `yaml:"timeout"`
+	}
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	p.ID = decoded.ID
+	p.Processor = decoded.Processor
+	p.Phase = decoded.Phase
+	p.OnError = decoded.OnError
+	p.Timeout = decoded.Timeout
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		if value.Content[i].Value != "config" {
+			continue
+		}
+		configJSON, err := yamlNodeToJSON(value.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("pre_inference_processors.config: %w", err)
+		}
+		p.Config = json.RawMessage(configJSON)
+		break
+	}
+	return nil
 }
 
 // StructuredOutput configures JSON Schema constrained responses.

@@ -82,3 +82,42 @@ handoffs:
 		t.Errorf("got Handoffs=%v, want [billing support]", def.Handoffs)
 	}
 }
+
+func TestPreInferenceProcessors_YAMLConfigIsJSON(t *testing.T) {
+	input := `kind: agent
+name: prepared
+system_prompt: Hello.
+pre_inference_processors:
+  - id: account-context
+    processor: mcp_tool
+    phase: run_start
+    config:
+      server: accounts
+      tool: current_user
+      arguments:
+        verbose: true
+    on_error: fail
+    timeout: 15
+`
+	var def config.Definition
+	if err := yaml.Unmarshal([]byte(input), &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(def.PreInferenceProcessors) != 1 {
+		t.Fatalf("got %d processors, want 1", len(def.PreInferenceProcessors))
+	}
+	processor := def.PreInferenceProcessors[0]
+	if processor.ID != "account-context" || processor.Timeout != 15 || processor.OnError != "fail" {
+		t.Fatalf("unexpected processor: %+v", processor)
+	}
+	var processorConfig struct {
+		Server string `json:"server"`
+		Tool   string `json:"tool"`
+	}
+	if err := json.Unmarshal(processor.Config, &processorConfig); err != nil {
+		t.Fatalf("config is not JSON: %v", err)
+	}
+	if processorConfig.Server != "accounts" || processorConfig.Tool != "current_user" {
+		t.Fatalf("unexpected config: %+v", processorConfig)
+	}
+}
