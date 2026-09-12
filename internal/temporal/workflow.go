@@ -36,6 +36,34 @@ var llmActivityOptions = workflow.ActivityOptions{
 }
 
 func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResult, error) {
+	return runAgentWorkflow(ctx, params, nil)
+}
+
+// persistentInbox is only used by the signal-driven persistent workflow. It
+// drains at LLM boundaries, after any preceding tool results are recorded.
+type persistentInbox struct {
+	channel workflow.ReceiveChannel
+	seen    map[string]bool
+}
+
+func (i *persistentInbox) drain(messages *[]llm.Message) {
+	if i == nil {
+		return
+	}
+	for {
+		var input PersistentInput
+		if !i.channel.ReceiveAsync(&input) {
+			return
+		}
+		if input.InputID == "" || i.seen[input.InputID] {
+			continue
+		}
+		i.seen[input.InputID] = true
+		*messages = append(*messages, llm.Message{Role: "user", Content: input.Message})
+	}
+}
+
+func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persistentInbox) (RunAgentResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("starting agent workflow", "agent", params.AgentName)
 
@@ -138,6 +166,9 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 	// 5. Multi-turn loop.
 	for turn := 0; turn < maxTurns; turn++ {
 		logger.Info("agent turn", "agent", def.Name, "turn", turn+1)
+		// Inputs delivered while inference or tools were active are only added
+		// here, so they cannot split an assistant tool call from its result.
+		inbox.drain(&messages)
 
 		// Defensive net: repair any provider-induced malformations (empty
 		// tool_call.Type, missing tool_call IDs, orphaned tool messages)

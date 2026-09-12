@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	TaskQueue    = "agentfoundry-worker"
-	WorkflowType = "RunAgentWorkflow"
+	TaskQueue              = "agentfoundry-worker"
+	WorkflowType           = "RunAgentWorkflow"
+	PersistentWorkflowType = "PersistentRunWorkflow"
+	PersistentInputSignal  = "persistent-input"
 )
 
 type LLMConfigInput struct {
@@ -17,14 +19,14 @@ type LLMConfigInput struct {
 }
 
 type RunAgentParams struct {
-	AgentID        string                   `json:"agent_id"`
-	AgentName      string                   `json:"agent_name"`
-	Message        string                   `json:"message"`
-	History        []llm.Message            `json:"history,omitempty"`
-	MCPServers     []MCPServerRef           `json:"mcp_servers,omitempty"`
-	ResponseSchema *config.StructuredOutput `json:"response_schema,omitempty"`
-	StreamID       string                   `json:"stream_id,omitempty"`
-	LLMConfig      *LLMConfigInput          `json:"llm_config,omitempty"`
+	AgentID             string                   `json:"agent_id"`
+	AgentName           string                   `json:"agent_name"`
+	Message             string                   `json:"message"`
+	History             []llm.Message            `json:"history,omitempty"`
+	MCPServers          []MCPServerRef           `json:"mcp_servers,omitempty"`
+	ResponseSchema      *config.StructuredOutput `json:"response_schema,omitempty"`
+	StreamID            string                   `json:"stream_id,omitempty"`
+	LLMConfig           *LLMConfigInput          `json:"llm_config,omitempty"`
 	MemoryEnabled       bool                     `json:"memory_enabled,omitempty"`
 	MemorySearchAgentID string                   `json:"memory_search_agent_id,omitempty"`
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
@@ -42,6 +44,19 @@ type MCPServerRef struct {
 type RunAgentResult struct {
 	Response string        `json:"response"`
 	History  []llm.Message `json:"history,omitempty"`
+}
+
+// PersistentInput is delivered through a Temporal signal, making accepted
+// inputs durable and ordered by the workflow event history.
+type PersistentInput struct {
+	Message string `json:"message"`
+	InputID string `json:"input_id"`
+}
+
+type PublishTurnResultInput struct {
+	StreamID string `json:"stream_id"`
+	Type     string `json:"type"`
+	Data     string `json:"data"`
 }
 
 type ResolveAgentInput struct {

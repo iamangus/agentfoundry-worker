@@ -33,6 +33,7 @@ func NewWorker(tcfg config.TemporalConf, orchClient *orchestrator.Client, memCli
 
 	w := worker.New(c, TaskQueue, worker.Options{})
 	w.RegisterWorkflow(RunAgentWorkflow)
+	w.RegisterWorkflow(PersistentRunWorkflow)
 	w.RegisterActivity(acts)
 
 	return &Worker{

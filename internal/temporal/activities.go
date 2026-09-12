@@ -48,6 +48,13 @@ func (a *Activities) ResolveAgentActivity(ctx context.Context, input ResolveAgen
 	return ResolveAgentResult{Definition: def}, nil
 }
 
+func (a *Activities) PublishTurnResultActivity(ctx context.Context, input PublishTurnResultInput) error {
+	if input.StreamID == "" {
+		return nil
+	}
+	return a.orchClient.PublishEvent(ctx, input.StreamID, input.Type, input.Data)
+}
+
 func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) (CallToolResult, error) {
 	logger := activity.GetLogger(ctx)
 	logger.Info("calling MCP tool", "server", input.ServerName, "tool", input.ToolName)
