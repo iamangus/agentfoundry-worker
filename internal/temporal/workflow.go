@@ -59,8 +59,16 @@ func (i *persistentInbox) drain(messages *[]llm.Message) {
 			continue
 		}
 		i.seen[input.InputID] = true
-		*messages = append(*messages, llm.Message{Role: "user", Content: input.Message})
+		*messages = append(*messages, llm.Message{Role: "user", Content: formatAdditionalInput(input)})
 	}
+}
+
+func formatAdditionalInput(input PersistentInput) string {
+	source := strings.TrimSpace(input.Metadata["source"])
+	if source == "" {
+		return "[Additional input received while you were working]\n" + input.Message
+	}
+	return fmt.Sprintf("[Additional input from %s received while you were working]\n%s", source, input.Message)
 }
 
 func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persistentInbox) (RunAgentResult, error) {

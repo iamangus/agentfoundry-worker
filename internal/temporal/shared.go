@@ -49,8 +49,9 @@ type RunAgentResult struct {
 // PersistentInput is delivered through a Temporal signal, making accepted
 // inputs durable and ordered by the workflow event history.
 type PersistentInput struct {
-	Message string `json:"message"`
-	InputID string `json:"input_id"`
+	Message  string            `json:"message"`
+	InputID  string            `json:"input_id"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type PublishTurnResultInput struct {

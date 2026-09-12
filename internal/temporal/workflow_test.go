@@ -7,6 +7,25 @@ import (
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
 
+func TestFormatAdditionalInput(t *testing.T) {
+	input := PersistentInput{Message: "The deployment completed."}
+	want := "[Additional input received while you were working]\nThe deployment completed."
+	if got := formatAdditionalInput(input); got != want {
+		t.Fatalf("formatAdditionalInput() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatAdditionalInputWithSource(t *testing.T) {
+	input := PersistentInput{
+		Message:  "PR #42 merged.",
+		Metadata: map[string]string{"source": "OpenDev"},
+	}
+	want := "[Additional input from OpenDev received while you were working]\nPR #42 merged."
+	if got := formatAdditionalInput(input); got != want {
+		t.Fatalf("formatAdditionalInput() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildToolMessageContentImage(t *testing.T) {
 	blocks := []orchestrator.ContentBlock{
 		{Type: "image", Data: "aGVsbG8=", MIMEType: "image/png"},
