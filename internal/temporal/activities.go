@@ -2,6 +2,7 @@ package temporal
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -238,7 +239,7 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 			return
 		}
 		added[ref] = true
-		llmName := serverName + "__" + toolName
+		llmName := llmToolName(serverName, toolName)
 		var params json.RawMessage
 		if ti.InputSchema != nil {
 			params = ti.InputSchema
@@ -351,6 +352,19 @@ func (a *Activities) BuildToolDefsActivity(ctx context.Context, input BuildToolD
 
 	logger.Info("tool set built", "agent", input.Definition.Name, "tools", len(toolDefs))
 	return result, nil
+}
+
+const maxLLMToolNameLength = 128
+
+// llmToolName keeps provider-facing function names within the OpenAI/Azure
+// limit while ToolRoute retains the complete MCP server and tool identifiers.
+func llmToolName(serverName, toolName string) string {
+	name := serverName + "__" + toolName
+	if len(name) <= maxLLMToolNameLength {
+		return name
+	}
+	digest := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("mcp_%x", digest[:16])
 }
 
 type BuildToolDefsInput struct {
