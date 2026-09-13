@@ -4,8 +4,18 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/orchestrator"
 )
+
+func TestTurnBudgetReservesStructuredFinalization(t *testing.T) {
+	def := &config.Definition{MaxTurns: 3}
+	actions, total, corrections := turnBudget(def, true)
+	if actions != 3 || corrections != 1 || total != 5 {
+		t.Fatalf("turnBudget default = (%d, %d, %d), want (3, 5, 1)", actions, total, corrections)
+	}
+
+}
 
 func TestFormatAdditionalInput(t *testing.T) {
 	input := PersistentInput{Message: "The deployment completed."}

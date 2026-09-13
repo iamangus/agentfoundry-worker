@@ -165,10 +165,7 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 		messages = append(messages, llm.Message{Role: "user", Content: params.Message})
 	}
 
-	maxTurns := def.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = 10
-	}
+	maxActionTurns, maxTurns, correctionAttempts := turnBudget(def, so != nil || def.ForceJSON)
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
 
 	// 5. Multi-turn loop.
@@ -190,7 +187,7 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 			Model:    def.Model,
 			Messages: messages,
 		}
-		if len(toolDefsResult.ToolDefs) > 0 && turn < maxTurns-1 {
+		if len(toolDefsResult.ToolDefs) > 0 && turn < maxActionTurns {
 			req.Tools = toolDefsResult.ToolDefs
 		}
 		if so != nil && supportsSchema {
@@ -397,7 +394,20 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 		}
 	}
 
-	return RunAgentResult{}, fmt.Errorf("agent %s exceeded max turns (%d)", def.Name, maxTurns)
+	return RunAgentResult{}, fmt.Errorf("agent %s exceeded action turns (%d) and finalization attempts (%d)", def.Name, maxActionTurns, correctionAttempts)
+}
+
+// turnBudget reserves tool-free turns for a final structured response and its
+// schema/JSON corrections without reducing the configured tool/action budget.
+func turnBudget(def *config.Definition, needsStructuredFinalization bool) (actionTurns, totalTurns, correctionAttempts int) {
+	actionTurns = def.MaxTurns
+	if actionTurns == 0 {
+		actionTurns = 10
+	}
+	if needsStructuredFinalization {
+		correctionAttempts = 1
+	}
+	return actionTurns, actionTurns + 1 + correctionAttempts, correctionAttempts
 }
 
 func runStartPreInferenceProcessors(ctx workflow.Context, def *config.Definition) (string, error) {
