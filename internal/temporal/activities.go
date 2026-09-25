@@ -53,7 +53,7 @@ func (a *Activities) PublishTurnResultActivity(ctx context.Context, input Publis
 	if input.StreamID == "" {
 		return nil
 	}
-	return a.orchClient.PublishEvent(ctx, input.StreamID, input.Type, input.Data)
+	return a.orchClient.PublishTurnResult(ctx, input.StreamID, input.InputID, input.Type, input.Data)
 }
 
 func (a *Activities) CallToolActivity(ctx context.Context, input CallToolInput) (CallToolResult, error) {

@@ -138,6 +138,10 @@ func (c *Client) PublishEvent(ctx context.Context, streamID, eventType, data str
 	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/events", map[string]string{"type": eventType, "data": data})
 }
 
+func (c *Client) PublishTurnResult(ctx context.Context, streamID, inputID, eventType, data string) error {
+	return c.publishShort(ctx, "/api/internal/streams/"+streamID+"/events", map[string]string{"type": eventType, "data": data, "input_id": inputID})
+}
+
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {

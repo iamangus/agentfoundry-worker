@@ -32,6 +32,8 @@ type RunAgentParams struct {
 	MemoryIngestAgentID string                   `json:"memory_ingest_agent_id,omitempty"`
 	UserSubject         string                   `json:"user_subject,omitempty"`
 	HandoffCount        int                      `json:"handoff_count,omitempty"`
+	SeenInputIDs        []string                 `json:"seen_input_ids,omitempty"`
+	PendingInputs       []PersistentInput        `json:"pending_inputs,omitempty"`
 }
 
 // MCPServerRef is the subset of an ephemeral MCP server config the workflow
@@ -56,6 +58,7 @@ type PersistentInput struct {
 
 type PublishTurnResultInput struct {
 	StreamID string `json:"stream_id"`
+	InputID  string `json:"input_id,omitempty"`
 	Type     string `json:"type"`
 	Data     string `json:"data"`
 }

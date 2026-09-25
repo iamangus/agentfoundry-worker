@@ -44,6 +44,7 @@ func RunAgentWorkflow(ctx workflow.Context, params RunAgentParams) (RunAgentResu
 type persistentInbox struct {
 	channel workflow.ReceiveChannel
 	seen    map[string]bool
+	onSeen  func(string)
 }
 
 func (i *persistentInbox) drain(messages *[]llm.Message) {
@@ -59,6 +60,9 @@ func (i *persistentInbox) drain(messages *[]llm.Message) {
 			continue
 		}
 		i.seen[input.InputID] = true
+		if i.onSeen != nil {
+			i.onSeen(input.InputID)
+		}
 		*messages = append(*messages, llm.Message{Role: "user", Content: formatAdditionalInput(input)})
 	}
 }
