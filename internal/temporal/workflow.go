@@ -45,6 +45,42 @@ type persistentInbox struct {
 	channel workflow.ReceiveChannel
 	seen    map[string]bool
 	onSeen  func(string)
+	steer   *persistentSteering
+}
+
+type persistentSteering struct {
+	accepting   bool
+	turnInputID string
+	pending     []PersistentInput
+	accepted    int
+	seen        map[string]bool
+	onSeen      func(string)
+}
+
+func (s *persistentSteering) accept(input PersistentInput) bool {
+	if input.InputID == "" {
+		return false
+	}
+	if s.seen[input.InputID] {
+		return true
+	}
+	if !s.accepting {
+		return false
+	}
+	s.seen[input.InputID] = true
+	s.pending = append(s.pending, input)
+	s.accepted++
+	s.onSeen(input.InputID)
+	return true
+}
+
+func (s *persistentSteering) drain(messages *[]llm.Message) int {
+	n := len(s.pending)
+	for _, input := range s.pending {
+		*messages = append(*messages, llm.Message{Role: "user", Content: formatAdditionalInput(input)})
+	}
+	s.pending = nil
+	return n
 }
 
 func (i *persistentInbox) drain(messages *[]llm.Message) {
@@ -65,6 +101,13 @@ func (i *persistentInbox) drain(messages *[]llm.Message) {
 		}
 		*messages = append(*messages, llm.Message{Role: "user", Content: formatAdditionalInput(input)})
 	}
+}
+
+func (i *persistentInbox) extraTurns() int {
+	if i == nil || i.steer == nil {
+		return 0
+	}
+	return i.steer.accepted
 }
 
 func formatAdditionalInput(input PersistentInput) string {
@@ -173,11 +216,14 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
 
 	// 5. Multi-turn loop.
-	for turn := 0; turn < maxTurns; turn++ {
+	for turn := 0; turn < maxTurns+inbox.extraTurns(); turn++ {
 		logger.Info("agent turn", "agent", def.Name, "turn", turn+1)
 		// Inputs delivered while inference or tools were active are only added
 		// here, so they cannot split an assistant tool call from its result.
 		inbox.drain(&messages)
+		if inbox != nil && inbox.steer != nil {
+			inbox.steer.drain(&messages)
+		}
 
 		// Defensive net: repair any provider-induced malformations (empty
 		// tool_call.Type, missing tool_call IDs, orphaned tool messages)
@@ -225,6 +271,18 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 		if len(resp.Choices) == 0 {
 			return RunAgentResult{}, fmt.Errorf("no choices in LLM response on turn %d", turn+1)
 		}
+		if inbox != nil && inbox.steer != nil && inbox.steer.drain(&messages) > 0 {
+			if params.StreamID != "" {
+				if err := workflow.ExecuteActivity(actCtx, (*Activities).PublishTurnResultActivity, PublishTurnResultInput{
+					StreamID: params.StreamID,
+					InputID:  inbox.steer.turnInputID,
+					Type:     "reset",
+				}).Get(ctx, nil); err != nil {
+					return RunAgentResult{}, err
+				}
+			}
+			continue
+		}
 
 		var assistantMsg llm.Message
 		for _, c := range resp.Choices {
@@ -254,6 +312,9 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 			}
 		}
 		if handoffCallIdx >= 0 {
+			if inbox != nil && inbox.steer != nil {
+				inbox.steer.accepting = false
+			}
 			tc := assistantMsg.ToolCalls[handoffCallIdx]
 			var handoffMsg string
 			var msgInput struct {
@@ -322,6 +383,9 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 				}
 			}
 
+			if inbox != nil && inbox.steer != nil {
+				inbox.steer.accepting = false
+			}
 			logger.Info("agent workflow completed", "agent", def.Name, "turns", turn+1)
 			finalResult := RunAgentResult{
 				Response: content,

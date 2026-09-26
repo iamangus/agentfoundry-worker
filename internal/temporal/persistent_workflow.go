@@ -14,6 +14,7 @@ const persistentHistoryEventLimit = 5000
 const persistentSeenLimit = 1024
 const persistentHistoryMessages = 120
 const persistentHistoryBytes = 256 * 1024
+const PersistentSteerUpdate = "persistent-steer"
 
 // PersistentRunWorkflow receives durable input signals and keeps one agent
 // history alive. Signals are drained by runAgentWorkflow only at LLM
@@ -26,6 +27,12 @@ func PersistentRunWorkflow(ctx workflow.Context, params RunAgentParams) error {
 	seenOrder := append([]string(nil), params.SeenInputIDs...)
 	for _, id := range seenOrder {
 		seen[id] = true
+	}
+	steer := &persistentSteering{seen: seen}
+	if err := workflow.SetUpdateHandler(ctx, PersistentSteerUpdate, func(_ workflow.Context, input PersistentInput) (bool, error) {
+		return steer.accept(input), nil
+	}); err != nil {
+		return fmt.Errorf("register steering update: %w", err)
 	}
 	history := append([]llm.Message(nil), params.History...)
 	pending := append([]PersistentInput(nil), params.PendingInputs...)
@@ -48,14 +55,21 @@ func PersistentRunWorkflow(ctx workflow.Context, params RunAgentParams) error {
 		turnParams.History = history
 		var result RunAgentResult
 		processed := []string{input.InputID}
+		steer.accepting = true
+		steer.turnInputID = input.InputID
+		steer.onSeen = func(id string) {
+			seenOrder = append(seenOrder, id)
+			processed = append(processed, id)
+		}
 		err := func() error {
 			var runErr error
-			result, runErr = runAgentWorkflow(ctx, turnParams, &persistentInbox{channel: inputs, seen: seen, onSeen: func(id string) {
+			result, runErr = runAgentWorkflow(ctx, turnParams, &persistentInbox{channel: inputs, seen: seen, steer: steer, onSeen: func(id string) {
 				seenOrder = append(seenOrder, id)
 				processed = append(processed, id)
 			}})
 			return runErr
 		}()
+		steer.accepting = false
 		ackType := "input_processed"
 		if err != nil {
 			ackType = "input_failed"
