@@ -2,6 +2,7 @@ package temporal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -118,7 +119,7 @@ func formatAdditionalInput(input PersistentInput) string {
 	return fmt.Sprintf("[Additional input from %s received while you were working]\n%s", source, input.Message)
 }
 
-func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persistentInbox) (RunAgentResult, error) {
+func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persistentInbox) (result RunAgentResult, runErr error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("starting agent workflow", "agent", params.AgentName)
 
@@ -214,6 +215,19 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 
 	maxActionTurns, maxTurns, correctionAttempts := turnBudget(def, so != nil || def.ForceJSON)
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
+	// Version the command change so existing histories retain their original
+	// activity options and payloads. Only configured backups opt into failover.
+	managedRetries := workflow.GetVersion(ctx, "backup-inference-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion && def.BackupProviderID != ""
+	usingBackup := managedRetries && params.BackupActive
+	failoverReason := params.BackupReason
+	defer func() { result.BackupActive, result.BackupReason = usingBackup, failoverReason }()
+	if managedRetries {
+		opts := llmActivityOptions
+		policy := *opts.RetryPolicy
+		policy.MaximumAttempts = 2
+		opts.RetryPolicy = &policy
+		llmCtx = workflow.WithActivityOptions(ctx, opts)
+	}
 
 	// 5. Multi-turn loop.
 	for turn := 0; turn < maxTurns+inbox.extraTurns(); turn++ {
@@ -256,14 +270,40 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 		}
 
 		var llmResult LLMChatResult
-		err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, LLMChatInput{
-			Request:   req,
-			StreamID:  params.StreamID,
-			LLMConfig: params.LLMConfig,
-			AgentID:   params.AgentID,
-		}).
-			Get(ctx, &llmResult)
+		input := LLMChatInput{
+			Request:        req,
+			StreamID:       params.StreamID,
+			LLMConfig:      params.LLMConfig,
+			AgentID:        params.AgentID,
+			ManagedRetries: managedRetries,
+			Backup:         usingBackup,
+			FailoverReason: failoverReason,
+		}
+		if usingBackup {
+			req.Model = def.BackupModel
+		}
+		if managedRetries {
+			input.ProviderID = def.ProviderID
+			if usingBackup {
+				input.ProviderID = def.BackupProviderID
+			}
+		}
+		err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, input).Get(ctx, &llmResult)
+		if err != nil && managedRetries && !usingBackup && eligibleForBackup(err) {
+			usingBackup = true
+			failoverReason = "Primary provider failed after 2 attempts: " + err.Error()
+			input.Backup = true
+			input.ProviderID = def.BackupProviderID
+			input.ResetResponse = true
+			input.FailoverReason = failoverReason
+			req.Model = def.BackupModel
+			input.Request = req
+			err = workflow.ExecuteActivity(llmCtx, (*Activities).LLMChatActivity, input).Get(ctx, &llmResult)
+		}
 		if err != nil {
+			if usingBackup {
+				return RunAgentResult{}, fmt.Errorf("%s; backup failed: %w", failoverReason, err)
+			}
 			return RunAgentResult{}, fmt.Errorf("LLM call failed on turn %d: %w", turn+1, err)
 		}
 
@@ -463,6 +503,17 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 	}
 
 	return RunAgentResult{}, fmt.Errorf("agent %s exceeded action turns (%d) and finalization attempts (%d)", def.Name, maxActionTurns, correctionAttempts)
+}
+
+func eligibleForBackup(err error) bool {
+	if temporal.IsCanceledError(err) {
+		return false
+	}
+	var application *temporal.ApplicationError
+	if errors.As(err, &application) && application.NonRetryable() {
+		return false
+	}
+	return true
 }
 
 // turnBudget reserves tool-free turns for a final structured response and its

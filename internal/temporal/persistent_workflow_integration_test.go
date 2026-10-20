@@ -8,6 +8,8 @@ import (
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
 	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -78,7 +80,7 @@ func TestPersistentWorkflowSteersBeforeFinalResponseAndRejectsLateUpdate(t *test
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(PersistentInputSignal, PersistentInput{InputID: "first", Message: "hello"})
 	}, time.Millisecond)
-	env.RegisterDelayedCallback(func() {
+	sendFollowUp := func() {
 		env.UpdateWorkflow(PersistentSteerUpdate, "follow-up", &testsuite.TestUpdateCallback{
 			OnAccept: func() {},
 			OnReject: func(err error) { t.Errorf("steering update rejected: %v", err) },
@@ -90,7 +92,17 @@ func TestPersistentWorkflowSteersBeforeFinalResponseAndRejectsLateUpdate(t *test
 				accepted, _ = result.(bool)
 			},
 		}, PersistentInput{InputID: "follow-up", Message: "actually stop", Metadata: map[string]string{"source": "web"}})
-	}, 2*time.Millisecond)
+	}
+	// Tie steering to inference actually starting, rather than to a wall-clock
+	// offset from workflow startup. Resolve/build scheduling can take longer
+	// under -race, otherwise the follow-up legitimately precedes inference.
+	followUpScheduled := false
+	env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		if info.ActivityType.Name == "LLMChatActivity" && !followUpScheduled {
+			followUpScheduled = true
+			env.RegisterDelayedCallback(sendFollowUp, time.Millisecond)
+		}
+	})
 	env.RegisterDelayedCallback(func() {
 		env.UpdateWorkflow(PersistentSteerUpdate, "too-late", &testsuite.TestUpdateCallback{
 			OnAccept: func() {},

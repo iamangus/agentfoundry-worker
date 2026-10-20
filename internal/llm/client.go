@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,6 +37,8 @@ type ClientConfig struct {
 	Headers map[string]string
 
 	SchemaValidation bool
+	// SingleAttempt delegates retry ownership to Temporal.
+	SingleAttempt bool
 }
 
 // OpenAIClient implements Client for any OpenAI-compatible API.
@@ -46,6 +49,7 @@ type OpenAIClient struct {
 	headers          map[string]string
 	httpClient       *http.Client
 	schemaValidation bool
+	singleAttempt    bool
 }
 
 // NewClient creates a new OpenAI-compatible LLM client.
@@ -61,6 +65,7 @@ func NewClient(cfg ClientConfig) *OpenAIClient {
 		headers:          cfg.Headers,
 		httpClient:       &http.Client{Timeout: 120 * time.Second},
 		schemaValidation: cfg.SchemaValidation,
+		singleAttempt:    cfg.SingleAttempt,
 	}
 }
 
@@ -127,9 +132,11 @@ type FunctionCall struct {
 
 // ChatResponse represents a chat completion response.
 type ChatResponse struct {
-	ID      string   `json:"id"`
-	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage"`
+	ProviderID string   `json:"provider_id,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	ID         string   `json:"id"`
+	Choices    []Choice `json:"choices"`
+	Usage      Usage    `json:"usage"`
 }
 
 // Choice represents a response choice.
@@ -184,15 +191,24 @@ func isEmptyResponse(resp *ChatResponse) bool {
 }
 
 func isRetryableHTTP(statusCode int) bool {
-	switch statusCode {
-	case http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
+	return statusCode == http.StatusTooManyRequests || statusCode >= 500
+}
+
+type HTTPError struct{ Status int }
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("LLM API error %d", e.Status) }
+
+// Retryable excludes request/configuration errors and caller cancellation.
+func Retryable(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
 	}
-	return false
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return isRetryableHTTP(httpErr.Status)
+	}
+	var network interface{ Timeout() bool }
+	return errors.As(err, &network) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
 // ChatCompletion sends a chat completion request to the configured API endpoint.
@@ -214,7 +230,10 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 		7 * time.Second,
 	}
 	const defaultBackoff = 10 * time.Second
-	const maxRetries = 10
+	maxRetries := 10
+	if c.singleAttempt {
+		maxRetries = 0
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -272,10 +291,12 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 				lastErr = fmt.Errorf("LLM returned empty response (no content, no tool calls, or finish_reason=length)")
 				continue
 			}
+			chatResp.ProviderID = resp.Header.Get("X-AgentFoundry-Provider")
+			chatResp.Model = resp.Header.Get("X-AgentFoundry-Model")
 			return &chatResp, nil
 		}
 
-		lastErr = fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
+		lastErr = &HTTPError{Status: resp.StatusCode}
 		if !isRetryableHTTP(resp.StatusCode) {
 			return nil, lastErr
 		}
@@ -320,14 +341,14 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &HTTPError{Status: resp.StatusCode}
 	}
 
 	var accumulatedContent string
 	var accumulatedToolCalls []ToolCall
 	var role string
 	var chunkID string
+	var finished bool
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -339,10 +360,17 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			finished = true
 			break
 		}
 
 		var chunk StreamChunk
+		var streamError struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal([]byte(data), &streamError) == nil && len(streamError.Error) > 0 && string(streamError.Error) != "null" {
+			return nil, &HTTPError{Status: http.StatusBadGateway}
+		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			slog.Warn("failed to parse stream chunk", "error", err, "data", data)
 			continue
@@ -353,6 +381,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 		}
 
 		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil {
+				finished = true
+			}
 			if choice.Index != 0 {
 				continue
 			}
@@ -397,7 +428,10 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Warn("stream scanner error", "error", err)
+		return nil, fmt.Errorf("read stream: %w", err)
+	}
+	if !finished {
+		return nil, io.ErrUnexpectedEOF
 	}
 
 	// Post-stream normalization: repair any provider quirks that would
@@ -433,7 +467,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	}
 
 	result := &ChatResponse{
-		ID: chunkID,
+		ProviderID: resp.Header.Get("X-AgentFoundry-Provider"),
+		Model:      resp.Header.Get("X-AgentFoundry-Model"),
+		ID:         chunkID,
 		Choices: []Choice{
 			{
 				Index: 0,

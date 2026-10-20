@@ -9,8 +9,9 @@ import (
 )
 
 type asyncPublishRequest struct {
-	path string
-	body any
+	path    string
+	body    any
+	barrier chan struct{}
 }
 
 type AsyncPublisher struct {
@@ -20,13 +21,16 @@ type AsyncPublisher struct {
 	once     sync.Once
 	dropped  atomic.Int64
 	lastLog  atomic.Int64
+	cancel   context.CancelFunc
 }
 
 func NewAsyncPublisher(ctx context.Context, c *Client, streamID string) *AsyncPublisher {
+	publishCtx, cancel := context.WithCancel(ctx)
 	p := &AsyncPublisher{
 		streamID: streamID,
 		ch:       make(chan asyncPublishRequest, 256),
 		done:     make(chan struct{}),
+		cancel:   cancel,
 	}
 	go func() {
 		// Do NOT close p.done here: Close() is the single closer (guarded by
@@ -37,7 +41,11 @@ func NewAsyncPublisher(ctx context.Context, c *Client, streamID string) *AsyncPu
 		for {
 			select {
 			case req := <-p.ch:
-				_ = c.publishShort(context.Background(), req.path, req.body)
+				if req.barrier != nil {
+					close(req.barrier)
+					continue
+				}
+				_ = c.publishShort(publishCtx, req.path, req.body)
 			case <-ctx.Done():
 				return
 			case <-p.done:
@@ -57,7 +65,28 @@ func (p *AsyncPublisher) PublishEvent(eventType, data string) {
 }
 
 func (p *AsyncPublisher) Close() {
-	p.once.Do(func() { close(p.done) })
+	p.once.Do(func() { close(p.done); p.cancel() })
+}
+
+// Flush is an ordered fence. A following activity must not publish a retry
+// reset while tokens from the preceding attempt are still queued.
+func (p *AsyncPublisher) Flush(ctx context.Context) error {
+	barrier := make(chan struct{})
+	select {
+	case p.ch <- asyncPublishRequest{barrier: barrier}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.done:
+		return context.Canceled
+	}
+	select {
+	case <-barrier:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.done:
+		return context.Canceled
+	}
 }
 
 func (p *AsyncPublisher) enqueue(path string, body any) {
