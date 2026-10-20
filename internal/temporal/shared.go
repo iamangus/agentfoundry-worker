@@ -19,6 +19,8 @@ type LLMConfigInput struct {
 }
 
 type RunAgentParams struct {
+	BackupActive        bool                     `json:"backup_active,omitempty"`
+	BackupReason        string                   `json:"backup_reason,omitempty"`
 	AgentID             string                   `json:"agent_id"`
 	AgentName           string                   `json:"agent_name"`
 	Message             string                   `json:"message"`
@@ -44,8 +46,10 @@ type MCPServerRef struct {
 }
 
 type RunAgentResult struct {
-	Response string        `json:"response"`
-	History  []llm.Message `json:"history,omitempty"`
+	BackupActive bool          `json:"backup_active,omitempty"`
+	BackupReason string        `json:"backup_reason,omitempty"`
+	Response     string        `json:"response"`
+	History      []llm.Message `json:"history,omitempty"`
 }
 
 // PersistentInput is delivered through a Temporal signal, making accepted
@@ -72,13 +76,19 @@ type ResolveAgentResult struct {
 }
 
 type LLMChatInput struct {
-	Request   *llm.ChatRequest `json:"request"`
-	StreamID  string           `json:"stream_id,omitempty"`
-	LLMConfig *LLMConfigInput  `json:"llm_config,omitempty"`
-	AgentID   string           `json:"agent_id"`
+	ProviderID     string           `json:"provider_id,omitempty"`
+	ResetResponse  bool             `json:"reset_response,omitempty"`
+	Backup         bool             `json:"backup,omitempty"`
+	ManagedRetries bool             `json:"managed_retries,omitempty"`
+	FailoverReason string           `json:"failover_reason,omitempty"`
+	Request        *llm.ChatRequest `json:"request"`
+	StreamID       string           `json:"stream_id,omitempty"`
+	LLMConfig      *LLMConfigInput  `json:"llm_config,omitempty"`
+	AgentID        string           `json:"agent_id"`
 }
 
 type LLMChatResult struct {
+	Attempts int32             `json:"attempts,omitempty"`
 	Response *llm.ChatResponse `json:"response"`
 }
 

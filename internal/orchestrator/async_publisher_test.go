@@ -111,3 +111,31 @@ func TestAsyncPublisherContextCancel(t *testing.T) {
 	pub.Close()
 	time.Sleep(10 * time.Millisecond)
 }
+
+func TestAsyncPublisherFlushPreservesBoundaryOrder(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		events = append(events, body["type"]+body["token"])
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	pub := NewAsyncPublisher(context.Background(), NewClient(Config{URL: srv.URL}), "s")
+	pub.PublishEvent("response_boundary", "")
+	pub.PublishToken("partial")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := pub.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pub.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 || events[0] != "response_boundary" || events[1] != "partial" {
+		t.Fatalf("out-of-order stream: %v", events)
+	}
+}

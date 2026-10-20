@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/angoo/agentfoundry-worker/internal/config"
 	"github.com/angoo/agentfoundry-worker/internal/llm"
@@ -153,7 +154,25 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	if input.StreamID != "" {
 		pub := orchestrator.NewAsyncPublisher(ctx, a.orchClient, input.StreamID)
 		defer pub.Close()
-		pub.PublishEvent("status", "Thinking")
+		if input.ManagedRetries {
+			defer func() {
+				flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				if flushErr := pub.Flush(flushCtx); flushErr != nil {
+					logger.Warn("stream flush incomplete", "error", flushErr)
+				}
+			}()
+		}
+		if input.ManagedRetries && (input.ResetResponse || activity.GetInfo(ctx).Attempt > 1) {
+			pub.PublishEvent("response_retry", "Retrying inference")
+		} else if input.ManagedRetries {
+			pub.PublishEvent("response_boundary", "")
+		}
+		status := "Thinking"
+		if input.Backup {
+			status = "Thinking with backup provider"
+		}
+		pub.PublishEvent("status", status)
 		var responseStarted bool
 		resp, err = llmClient.ChatCompletionStream(ctx, input.Request, func(chunk llm.StreamChunk) {
 			for _, choice := range chunk.Choices {
@@ -176,10 +195,13 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	}
 
 	if err != nil {
+		if input.ManagedRetries && !llm.Retryable(err) {
+			return LLMChatResult{}, temporal.NewNonRetryableApplicationError("LLM request rejected (check provider configuration and request)", "NonRetryable", err)
+		}
 		return LLMChatResult{}, fmt.Errorf("LLM chat completion: %w", err)
 	}
 
-	return LLMChatResult{Response: resp}, nil
+	return LLMChatResult{Response: resp, Attempts: activity.GetInfo(ctx).Attempt}, nil
 }
 
 func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
@@ -187,6 +209,10 @@ func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
 		BaseURL:          strings.TrimRight(a.orchClient.BaseURL(), "/") + "/api/v1/inference/agents/" + input.AgentID,
 		APIKey:           a.orchClient.APIKey(),
 		SchemaValidation: false,
+		SingleAttempt:    input.ManagedRetries,
+	}
+	if input.Backup {
+		cfg.Headers = map[string]string{"X-AgentFoundry-Backup": "true"}
 	}
 	if input.LLMConfig != nil {
 		cfg.SchemaValidation = input.LLMConfig.SchemaValidation

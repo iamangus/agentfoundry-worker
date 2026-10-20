@@ -70,6 +70,9 @@ func PersistentRunWorkflow(ctx workflow.Context, params RunAgentParams) error {
 			return runErr
 		}()
 		steer.accepting = false
+		if result.BackupActive {
+			params.BackupActive, params.BackupReason = true, result.BackupReason
+		}
 		ackType := "input_processed"
 		if err != nil {
 			ackType = "input_failed"
