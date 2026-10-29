@@ -15,6 +15,7 @@ const persistentSeenLimit = 1024
 const persistentHistoryMessages = 120
 const persistentHistoryBytes = 256 * 1024
 const PersistentSteerUpdate = "persistent-steer"
+const persistentPrimaryRecoveryChangeID = "persistent-primary-per-turn-v1/"
 
 // PersistentRunWorkflow receives durable input signals and keeps one agent
 // history alive. Signals are drained by runAgentWorkflow only at LLM
@@ -50,6 +51,12 @@ func PersistentRunWorkflow(ctx workflow.Context, params RunAgentParams) error {
 		}
 		seen[input.InputID] = true
 		seenOrder = append(seenOrder, input.InputID)
+		// Gate each turn independently: a marker first encountered while replaying
+		// an old turn must not pin new turns to legacy routing until rollover.
+		retryPrimary := workflow.GetVersion(ctx, fmt.Sprintf("%s%d", persistentPrimaryRecoveryChangeID, turns), workflow.DefaultVersion, 1) != workflow.DefaultVersion
+		if retryPrimary {
+			params.BackupActive, params.BackupReason = false, ""
+		}
 		turnParams := params
 		turnParams.Message = input.Message
 		turnParams.History = history
@@ -70,7 +77,7 @@ func PersistentRunWorkflow(ctx workflow.Context, params RunAgentParams) error {
 			return runErr
 		}()
 		steer.accepting = false
-		if result.BackupActive {
+		if !retryPrimary && result.BackupActive {
 			params.BackupActive, params.BackupReason = true, result.BackupReason
 		}
 		ackType := "input_processed"

@@ -44,10 +44,17 @@ For configured backups, Temporal owns a two-attempt primary retry budget and a
 two-attempt backup budget. Rate limits, connection errors, timeouts, and provider
 5xx errors are eligible. Invalid requests, authentication failures, and
 cancellations do not switch providers. Once switched, the backup is retained
-through tool calls and persistent turns/Continue-As-New; a child agent uses its
-own definition. Existing workflows use the original behavior via the
+through tool calls and steering within the current turn. Each new persistent
+turn retries the primary, including when older executions carried backup state
+through Continue-As-New. A recovered provider or corrected URL therefore takes
+effect on the next turn without resetting the conversation. Child agents use
+their own definition. Existing workflows use the original behavior via the
 `backup-inference-v1` version marker. Agents without backups retain their prior
 retry policy.
+
+Per-turn `persistent-primary-per-turn-v1/` version markers preserve replay of
+old turns while enabling primary recovery on the next new input in an existing
+execution. Persistent rollovers no longer carry a turn's failover into new work.
 
 Switching retries only inference, not completed tools. Stream retries discard
 only the incomplete response. Provider/model IDs, attempts, and switch reasons
