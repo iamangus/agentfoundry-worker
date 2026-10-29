@@ -20,6 +20,10 @@ The worker publishes turn results to Foundry, which persists the status and
 response before notifying SSE subscribers. Foundry can reattach to an existing
 Temporal workflow after a restart.
 
+## Inference observability
+
+Streamed requests ask for `stream_options.include_usage` and preserve the final usage frame, including cached prompt and reasoning token details when provided. Requests through Foundry carry run, persistent-turn, workflow execution, activity, Temporal-attempt and HTTP-attempt correlation headers. Foundry records authoritative per-HTTP-attempt metrics independently of Temporal history. Existing activity payloads without a turn ID remain compatible; Foundry falls back to the run's current input ID.
+
 ## Build and verify
 
 ```sh
