@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,14 +149,21 @@ type Choice struct {
 
 // Usage represents token usage.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens *int `json:"cached_tokens,omitempty"`
+	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 type StreamChunk struct {
 	ID      string         `json:"id"`
 	Choices []StreamChoice `json:"choices"`
+	Usage   *Usage         `json:"usage,omitempty"`
 }
 
 type StreamChoice struct {
@@ -268,6 +276,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req *ChatRequest) (*C
 		for k, v := range c.headers {
 			httpReq.Header.Set(k, v)
 		}
+		if c.headers["X-AgentFoundry-Activity-ID"] != "" {
+			httpReq.Header.Set("X-AgentFoundry-HTTP-Attempt", strconv.Itoa(attempt+1))
+		}
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -312,8 +323,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 
 	streamReq := &struct {
 		*ChatRequest
-		Stream bool `json:"stream"`
-	}{ChatRequest: req, Stream: true}
+		Stream        bool            `json:"stream"`
+		StreamOptions map[string]bool `json:"stream_options"`
+	}{ChatRequest: req, Stream: true, StreamOptions: map[string]bool{"include_usage": true}}
 
 	body, err := json.Marshal(streamReq)
 	if err != nil {
@@ -333,6 +345,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
+	if c.headers["X-AgentFoundry-Activity-ID"] != "" {
+		httpReq.Header.Set("X-AgentFoundry-HTTP-Attempt", "1")
+	}
 
 	resp, err := streamClient.Do(httpReq)
 	if err != nil {
@@ -349,6 +364,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	var role string
 	var chunkID string
 	var finished bool
+	var usage Usage
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -378,6 +394,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 
 		if chunk.ID != "" {
 			chunkID = chunk.ID
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
 		}
 
 		for _, choice := range chunk.Choices {
@@ -467,6 +486,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	}
 
 	result := &ChatResponse{
+		Usage:      usage,
 		ProviderID: resp.Header.Get("X-AgentFoundry-Provider"),
 		Model:      resp.Header.Get("X-AgentFoundry-Model"),
 		ID:         chunkID,
