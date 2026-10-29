@@ -127,10 +127,12 @@ func TestBackupStateResumesWithoutPrimary(t *testing.T) {
 	}
 }
 
-func TestPersistentBackupStaysActiveAcrossInputs(t *testing.T) {
+func TestLegacyPersistentBackupStaysActiveAcrossInputs(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{})
+	env.OnGetVersion(persistentPrimaryRecoveryChangeID+"0", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
+	env.OnGetVersion(persistentPrimaryRecoveryChangeID+"1", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
 	env.OnActivity("ResolveAgentActivity", mock.Anything, mock.Anything).Return(ResolveAgentResult{Definition: &config.Definition{AgentID: "a", Name: "a", BackupProviderID: "b"}}, nil)
 	env.OnActivity("BuildToolDefsActivity", mock.Anything, mock.Anything).Return(BuildToolDefsResult{}, nil)
 	env.OnActivity("PublishTurnResultActivity", mock.Anything, mock.Anything).Return(nil)
