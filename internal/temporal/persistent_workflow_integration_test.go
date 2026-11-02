@@ -22,7 +22,10 @@ func TestPersistentWorkflowAcknowledgesInputAndIgnoresDuplicateSignal(t *testing
 	env.OnActivity("ResolveAgentActivity", mock.Anything, mock.Anything).Return(ResolveAgentResult{Definition: def}, nil)
 	env.OnActivity("BuildToolDefsActivity", mock.Anything, mock.Anything).Return(BuildToolDefsResult{}, nil)
 	llmCalls := 0
-	env.OnActivity("LLMChatActivity", mock.Anything, mock.Anything).Return(func(_ context.Context, _ LLMChatInput) (LLMChatResult, error) {
+	env.OnActivity("LLMChatActivity", mock.Anything, mock.Anything).Return(func(_ context.Context, input LLMChatInput) (LLMChatResult, error) {
+		if input.InputID != "input-1" {
+			t.Errorf("missing turn correlation: %q", input.InputID)
+		}
 		llmCalls++
 		return LLMChatResult{Response: &llm.ChatResponse{Choices: []llm.Choice{{Index: 0, Message: llm.Message{Role: "assistant", Content: "answer"}, FinishReason: "stop"}}}}, nil
 	})

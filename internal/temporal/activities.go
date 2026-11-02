@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -146,7 +147,7 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	}()
 	defer close(heartbeatStop)
 
-	llmClient := a.llmClientForInput(input)
+	llmClient := a.llmClientForInput(ctx, input)
 
 	var resp *llm.ChatResponse
 	var err error
@@ -204,15 +205,24 @@ func (a *Activities) LLMChatActivity(ctx context.Context, input LLMChatInput) (L
 	return LLMChatResult{Response: resp, Attempts: activity.GetInfo(ctx).Attempt}, nil
 }
 
-func (a *Activities) llmClientForInput(input LLMChatInput) llm.Client {
+func (a *Activities) llmClientForInput(ctx context.Context, input LLMChatInput) llm.Client {
+	info := activity.GetInfo(ctx)
 	cfg := llm.ClientConfig{
 		BaseURL:          strings.TrimRight(a.orchClient.BaseURL(), "/") + "/api/v1/inference/agents/" + input.AgentID,
 		APIKey:           a.orchClient.APIKey(),
 		SchemaValidation: false,
 		SingleAttempt:    input.ManagedRetries,
+		Headers: map[string]string{
+			"X-AgentFoundry-Run-ID":           input.StreamID,
+			"X-AgentFoundry-Input-ID":         input.InputID,
+			"X-AgentFoundry-Workflow-ID":      info.WorkflowExecution.ID,
+			"X-AgentFoundry-Execution-ID":     info.WorkflowExecution.RunID,
+			"X-AgentFoundry-Activity-ID":      info.ActivityID,
+			"X-AgentFoundry-Activity-Attempt": strconv.Itoa(int(info.Attempt)),
+		},
 	}
 	if input.Backup {
-		cfg.Headers = map[string]string{"X-AgentFoundry-Backup": "true"}
+		cfg.Headers["X-AgentFoundry-Backup"] = "true"
 	}
 	if input.LLMConfig != nil {
 		cfg.SchemaValidation = input.LLMConfig.SchemaValidation

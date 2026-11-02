@@ -279,6 +279,9 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 			Backup:         usingBackup,
 			FailoverReason: failoverReason,
 		}
+		if inbox != nil && inbox.steer != nil {
+			input.InputID = inbox.steer.turnInputID
+		}
 		if usingBackup {
 			req.Model = def.BackupModel
 		}

@@ -76,6 +76,7 @@ type ResolveAgentResult struct {
 }
 
 type LLMChatInput struct {
+	InputID        string           `json:"input_id,omitempty"`
 	ProviderID     string           `json:"provider_id,omitempty"`
 	ResetResponse  bool             `json:"reset_response,omitempty"`
 	Backup         bool             `json:"backup,omitempty"`
