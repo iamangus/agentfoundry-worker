@@ -335,6 +335,7 @@ func runAgentWorkflow(ctx workflow.Context, params RunAgentParams, inbox *persis
 			if assistantMsg.Content == nil {
 				assistantMsg.Content = c.Message.Content
 			}
+			assistantMsg.ReasoningContent += c.Message.ReasoningContent
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, c.Message.ToolCalls...)
 		}
 		messages = append(messages, assistantMsg)

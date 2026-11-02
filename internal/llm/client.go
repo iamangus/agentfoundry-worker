@@ -97,10 +97,12 @@ type ChatRequest struct {
 
 // Message represents a chat message.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"` // string or nil
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role    string `json:"role"`
+	Content any    `json:"content,omitempty"` // string or nil
+	// DeepSeek requires this on assistant tool-call messages in thinking mode.
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolDef represents a tool definition for the LLM.
@@ -165,9 +167,10 @@ type StreamChoice struct {
 }
 
 type StreamDelta struct {
-	Role      string     `json:"role,omitempty"`
-	Content   *string    `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role             string     `json:"role,omitempty"`
+	Content          *string    `json:"content,omitempty"`
+	ReasoningContent *string    `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }
 
 func isEmptyResponse(resp *ChatResponse) bool {
@@ -345,6 +348,7 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 	}
 
 	var accumulatedContent string
+	var accumulatedReasoning string
 	var accumulatedToolCalls []ToolCall
 	var role string
 	var chunkID string
@@ -392,6 +396,9 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 			}
 			if choice.Delta.Content != nil {
 				accumulatedContent += *choice.Delta.Content
+			}
+			if choice.Delta.ReasoningContent != nil {
+				accumulatedReasoning += *choice.Delta.ReasoningContent
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				idx := tc.Index
@@ -474,9 +481,10 @@ func (c *OpenAIClient) ChatCompletionStream(ctx context.Context, req *ChatReques
 			{
 				Index: 0,
 				Message: Message{
-					Role:      role,
-					Content:   finalContent,
-					ToolCalls: accumulatedToolCalls,
+					Role:             role,
+					Content:          finalContent,
+					ReasoningContent: accumulatedReasoning,
+					ToolCalls:        accumulatedToolCalls,
 				},
 				FinishReason: "stop",
 			},
