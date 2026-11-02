@@ -42,16 +42,24 @@ func TestBackupAfterTwoPrimaryAttemptsAndStickyAcrossToolCalls(t *testing.T) {
 		message := llm.Message{Role: "assistant", Content: "done"}
 		if backup == 1 {
 			message.Content = nil
+			message.ReasoningContent = "Need lookup"
 			message.ToolCalls = []llm.ToolCall{{ID: "call-1", Type: "function", Function: llm.FunctionCall{Name: "lookup", Arguments: "{}"}}}
 		} else {
 			found := false
+			reasoningFound := false
 			for _, m := range in.Request.Messages {
+				if m.Role == "assistant" && m.ReasoningContent == "Need lookup" {
+					reasoningFound = true
+				}
 				if m.Role == "tool" && m.Content == "tool result" {
 					found = true
 				}
 			}
 			if !found {
 				t.Error("backup lost completed tool results")
+			}
+			if !reasoningFound {
+				t.Error("backup lost reasoning required by DeepSeek tool turns")
 			}
 		}
 		return LLMChatResult{Response: &llm.ChatResponse{Choices: []llm.Choice{{Message: message}}}}, nil
